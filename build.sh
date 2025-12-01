@@ -10,7 +10,7 @@ if ! command -v cc &> /dev/null; then
     sudo apt update && sudo apt install -y build-essential
 fi
 
-# === 2. 安装 bpf-linker（如果未安装）===
+# === 2. 安装 bpf-linker(如果未安装)===
 if ! command -v bpf-linker &> /dev/null; then
     echo "installing bpf-linker..."
     cargo install bpf-linker
@@ -56,11 +56,11 @@ else
     exit 1
 fi
 
-# === 6. 运行观测器（可选）===
+# === 6. 运行观测器(可选)===
 echo "💡 使用以下命令运行 observer 观测所有进程:"
 echo "    sudo RUST_LOG=info $USER_BIN"
 
-# 如果你想自动运行，取消下一行注释
+# 如果你想自动运行,取消下一行注释
 # sudo RUST_LOG=info "$USER_BIN"
 
 #sudo RUST_LOG=info ./target/release/observer --pid $(pgrep -n websocket)

@@ -54,7 +54,7 @@ pub fn tcp_sendmsg_return(ctx: RetProbeContext) -> u32 {
         let ret: i32 = ctx.ret::<i32>();
 
         if ret > 0 {
-            // 修正:高 32 位是 TGID (主进程ID)，低 32 位是 PID (线程ID)
+            // 修正:高 32 位是 TGID (主进程ID),低 32 位是 PID (线程ID)
             let tgid = (pid_tgid >> 32) as u32; // 主进程 ID (TGID)
             let pid = pid_tgid as u32; // 线程 ID (PID)
 

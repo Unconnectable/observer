@@ -27,7 +27,7 @@
 // }
 
 fn main() {
-    // 这里故意留空，只打印一条消息告诉 Cargo 文件依赖关系
+    // 这里故意留空,只打印一条消息告诉 Cargo 文件依赖关系
     // 我们将手动编译内核态 eBPF 代码
     println!("cargo:rerun-if-changed=../observer-ebpf/src");
 }
