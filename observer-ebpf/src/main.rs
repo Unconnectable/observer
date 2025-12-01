@@ -1,28 +1,85 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{macros::kprobe, programs::ProbeContext};
-use aya_log_ebpf::info;
+use aya_ebpf::{
+    cty::c_void,
+    helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_trace_vprintk,
+    },
+    macros::{kprobe, kretprobe, map},
+    maps::{HashMap, PerfEventArray},
+    programs::{ProbeContext, RetProbeContext},
+};
+use observer_common::{TcpEvent, TrafficDirection};
+
+#[map]
+static EVENTS: PerfEventArray<TcpEvent> = PerfEventArray::new(0);
+
+// Map 大小设为 10240
+#[map]
+static SEND_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
+
+// --- 调试辅助函数 ---
+// 保持注释状态
+/*
+unsafe fn debug_print(msg: &[u8]) {
+    bpf_trace_vprintk(
+        msg.as_ptr() as *const i8,
+        msg.len() as u32,
+        core::ptr::null() as *const c_void,
+        0,
+    );
+}
+*/
+// ------------------
 
 #[kprobe]
-pub fn observer(ctx: ProbeContext) -> u32 {
-    match try_observer(ctx) {
-        Ok(ret) => ret,
-        Err(ret) => ret,
+pub fn tcp_sendmsg_entry(_ctx: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let start_time = unsafe { bpf_ktime_get_ns() };
+
+    if let Err(_e) = SEND_START.insert(&pid_tgid, &start_time, 0) {
+        // map 满了
     }
+    0
 }
 
-fn try_observer(ctx: ProbeContext) -> Result<u32, u32> {
-    info!(&ctx, "kprobe called");
-    Ok(0)
+#[kretprobe]
+pub fn tcp_sendmsg_return(ctx: RetProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if let Some(start_time) = unsafe { SEND_START.get(&pid_tgid) } {
+        let end_time = unsafe { bpf_ktime_get_ns() };
+        let duration_ns = end_time - *start_time;
+        let ret: i32 = ctx.ret::<i32>();
+
+        if ret > 0 {
+            // 修正:高 32 位是 TGID (主进程ID)，低 32 位是 PID (线程ID)
+            let tgid = (pid_tgid >> 32) as u32; // 主进程 ID (TGID)
+            let pid = pid_tgid as u32; // 线程 ID (PID)
+
+            let comm = match bpf_get_current_comm() {
+                Ok(c) => c,
+                Err(_) => [0; 16],
+            };
+
+            let event = TcpEvent {
+                pid,
+                tgid,
+                len: ret as usize,
+                direction: TrafficDirection::Egress,
+                duration_ns,
+                comm,
+            };
+
+            EVENTS.output(&ctx, &event, 0);
+        }
+        let _ = SEND_START.remove(&pid_tgid);
+    }
+    0
 }
 
-#[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
+    unsafe { core::hint::unreachable_unchecked() }
 }
-
-#[unsafe(link_section = "license")]
-#[unsafe(no_mangle)]
-static LICENSE: [u8; 13] = *b"Dual MIT/GPL\0";

@@ -1,56 +1,113 @@
-use aya::programs::KProbe;
-#[rustfmt::skip]
-use log::{debug, warn};
+use aya::{
+    include_bytes_aligned, maps::perf::AsyncPerfEventArray, programs::KProbe, util::online_cpus,
+    Bpf,
+};
+use bytes::BytesMut;
+use clap::Parser;
+use log::info;
+use observer_common::TcpEvent;
 use tokio::signal;
 
+#[derive(Debug, Parser)]
+struct Opt {
+    /// 要监控的目标 TGID (主进程 ID)
+    #[clap(short, long)]
+    pid: Option<u32>,
+}
+
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
+    let opt = Opt::parse();
 
-    // Bump the memlock rlimit. This is needed for older kernels that don't use the
-    // new memcg based accounting, see https://lwn.net/Articles/837122/
-    let rlim = libc::rlimit {
-        rlim_cur: libc::RLIM_INFINITY,
-        rlim_max: libc::RLIM_INFINITY,
-    };
-    let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
-    if ret != 0 {
-        debug!("remove limit on locked memory failed, ret is: {ret}");
-    }
+    // 1. 加载 eBPF 字节码
+    #[cfg(debug_assertions)]
+    let mut bpf = Bpf::load(include_bytes_aligned!(
+        "../../target/bpfel-unknown-none/release/observer"
+    ))?;
+    #[cfg(not(debug_assertions))]
+    let mut bpf = Bpf::load(include_bytes_aligned!(
+        "../../target/bpfel-unknown-none/release/observer"
+    ))?;
 
-    // This will include your eBPF object file as raw bytes at compile-time and load it at
-    // runtime. This approach is recommended for most real-world use cases. If you would
-    // like to specify the eBPF program at runtime rather than at compile-time, you can
-    // reach for `Bpf::load_file` instead.
-    let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
-        env!("OUT_DIR"),
-        "/observer"
-    )))?;
-    match aya_log::EbpfLogger::init(&mut ebpf) {
-        Err(e) => {
-            // This can happen if you remove all log statements from your eBPF program.
-            warn!("failed to initialize eBPF logger: {e}");
-        }
-        Ok(logger) => {
-            let mut logger =
-                tokio::io::unix::AsyncFd::with_interest(logger, tokio::io::Interest::READABLE)?;
-            tokio::task::spawn(async move {
-                loop {
-                    let mut guard = logger.readable_mut().await.unwrap();
-                    guard.get_inner_mut().flush();
-                    guard.clear_ready();
-                }
-            });
-        }
-    }
-    let program: &mut KProbe = ebpf.program_mut("observer").unwrap().try_into()?;
+    // 2. 加载并挂载 KProbe (Entry)
+    let program: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
     program.load()?;
-    program.attach("kprobe ", 0)?;
+    program.attach("tcp_sendmsg", 0)?;
+    info!("Attached tcp_sendmsg entry probe");
 
-    let ctrl_c = signal::ctrl_c();
-    println!("Waiting for Ctrl-C...");
-    ctrl_c.await?;
-    println!("Exiting...");
+    // 3. 加载并挂载 KRetProbe (Return)
+    let program: &mut KProbe = bpf.program_mut("tcp_sendmsg_return").unwrap().try_into()?;
+    program.load()?;
+    program.attach("tcp_sendmsg", 0)?;
+    info!("Attached tcp_sendmsg return probe");
+
+    // 4. 读取 Perf Buffer
+    let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
+
+    info!("Waiting for events...");
+    if let Some(p) = opt.pid {
+        info!("Filtering for TGID (Main Process ID): {}", p);
+    } else {
+        info!("No PID filter (showing all TCP traffic)");
+    }
+
+    for cpu_id in online_cpus()? {
+        let mut buf = perf_array.open(cpu_id, None)?;
+        let target_pid = opt.pid;
+
+        tokio::spawn(async move {
+            let mut buffers = (0..10)
+                .map(|_| BytesMut::with_capacity(1024))
+                .collect::<Vec<_>>();
+
+            loop {
+                // 读取事件
+                let events = buf.read_events(&mut buffers).await.unwrap();
+
+                for i in 0..events.read {
+                    let buf = &mut buffers[i];
+                    let ptr = buf.as_ptr() as *const TcpEvent;
+                    let event = unsafe { ptr.read_unaligned() };
+
+                    // 解析进程名
+                    let comm = std::str::from_utf8(&event.comm)
+                        .unwrap_or("<unknown>")
+                        .trim_end_matches('\0');
+
+                    // 过滤与打印逻辑
+                    if let Some(target) = target_pid {
+                        // 使用 event.tgid (主进程ID) 进行过滤
+                        if event.tgid != target {
+                            // 保持调试输出来确认我们捕获到了正确的 TGID
+                            // if comm.contains("tokio-runtime") || comm.contains("websocket") {
+                            //     // 打印 Mismatch 只是调试，真正的目标是打印 SEND
+                            // }
+                            if comm.contains("tokio")
+                                || comm.contains("websocket")
+                                || comm.contains("press")
+                            {
+                                println!(
+                                    "[DEBUG] PID Mismatch! Event TGID: {}, Target: {}, Comm: {}",
+                                    event.tgid, target, comm
+                                );
+                            }
+                            continue;
+                        }
+                    }
+
+                    // 只有 TGID 匹配时才会到达这里
+                    println!(
+                        "[SEND] PID: {:<6} Comm: {:<12} Size: {:<6} bytes | Latency: {:<6} ns",
+                        event.pid, comm, event.len, event.duration_ns
+                    );
+                }
+            }
+        });
+    }
+
+    signal::ctrl_c().await?;
+    info!("Exiting...");
 
     Ok(())
 }
