@@ -4,26 +4,26 @@ set -e  # 遇到任何错误立即退出
 
 echo "start building user and kernel"
 
-# === 1. 确保必要依赖已安装 ===
-if ! command -v cc &> /dev/null; then
-    echo "missing cc ! build-essential..."
-    sudo apt update && sudo apt install -y build-essential
-fi
+# # === 1. 确保必要依赖已安装 ===
+# if ! command -v cc &> /dev/null; then
+#     echo "missing cc ! build-essential..."
+#     sudo apt update && sudo apt install -y build-essential
+# fi
 
-# === 2. 安装 bpf-linker(如果未安装)===
-if ! command -v bpf-linker &> /dev/null; then
-    echo "installing bpf-linker..."
-    cargo install bpf-linker
-else
-    echo "✅ bpf-linker installed: $(which bpf-linker)"
-fi
+# # === 2. 安装 bpf-linker(如果未安装)===
+# if ! command -v bpf-linker &> /dev/null; then
+#     echo "installing bpf-linker..."
+#     cargo install bpf-linker
+# else
+#     echo "✅ bpf-linker installed: $(which bpf-linker)"
+# fi
 
-# === 3. 确保 nightly 工具链及 rust-src 组件 ===
-echo "🔧 Rust nightly tool-chain ..."
-rustup toolchain install nightly --profile minimal --force-non-host || true
+# # === 3. 确保 nightly 工具链及 rust-src 组件 ===
+# echo "🔧 Rust nightly tool-chain ..."
+# rustup toolchain install nightly --profile minimal --force-non-host || true
 
-echo "📥 rust-src componet ..."
-rustup component add rust-src --toolchain nightly
+# echo "📥 rust-src componet ..."
+# rustup component add rust-src --toolchain nightly
 
 # === 4. 构建 eBPF 程序 ===
 echo "🔨 building eBPF  (observer-ebpf)..."

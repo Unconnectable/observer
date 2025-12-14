@@ -15,6 +15,10 @@ tokio = { version = "1.0", features = ["full"] }
 bytes = "1"
 libc = "0.2"
 
+config = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+sysinfo = "0.29" # 用于查找进程
+
 # 新增这一块！
 [build-dependencies]
 anyhow = "1"

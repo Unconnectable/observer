@@ -3,102 +3,166 @@ use aya::{
     Bpf,
 };
 use bytes::BytesMut;
-use clap::Parser;
-use log::info;
+use log::{error, info, warn};
 use observer_common::TcpEvent;
+use serde::Deserialize;
+use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 use tokio::signal;
 
-#[derive(Debug, Parser)]
-struct Opt {
-    /// 要监控的目标 TGID (主进程 ID)
-    #[clap(short, long)]
-    pid: Option<u32>,
+// --- 重新设计的配置结构 ---
+#[derive(Debug, Deserialize)]
+struct AppConfig {
+    probes: ProbesConfig,
+    discovery: DiscoveryConfig,
+    filters: FiltersConfig,
+    settings: SettingsConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProbesConfig {
+    target_func: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscoveryConfig {
+    force_pid: Option<u32>,
+    auto_detect_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FiltersConfig {
+    include_names: Vec<String>,
+    exclude_names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingsConfig {
+    perf_pages: usize,
+}
+
+// 自动发现函数
+fn find_target_tgid(config: &DiscoveryConfig) -> Option<u32> {
+    if let Some(pid) = config.force_pid {
+        info!("🎯 Target force-set to PID: {}", pid);
+        return Some(pid);
+    }
+
+    if config.auto_detect_name.is_empty() {
+        return None;
+    }
+
+    info!("🔍 Scanning system for: '{}'...", config.auto_detect_name);
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    let pids: Vec<u32> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| p.name().contains(&config.auto_detect_name))
+        .map(|(pid, _)| pid.as_u32())
+        .collect();
+
+    if let Some(pid) = pids.last() {
+        info!("✅ Found match: PID {}", pid);
+        return Some(*pid);
+    }
+
+    warn!(
+        "❌ No process matching '{}' found.",
+        config.auto_detect_name
+    );
+    None
 }
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
-    let opt = Opt::parse();
 
-    // 1. 加载 eBPF 字节码
+    // 1. 加载并解析配置 config.toml
+    let settings = config::Config::builder()
+        .add_source(config::File::with_name("config"))
+        .build()?;
+    let config: AppConfig = settings.try_deserialize()?;
+    info!(
+        "📋 Filter Rules: Include {:?}, Exclude {:?}",
+        config.filters.include_names, config.filters.exclude_names
+    );
+
+    // 2. 寻找要监测的pid
+    let target_tgid = find_target_tgid(&config.discovery);
+    if target_tgid.is_none() {
+        warn!("🌐 Running in GLOBAL mode (Filtered by names only)");
+    }
+
+    // 3. 加载 eBPF 字节码
     #[cfg(debug_assertions)]
     let mut bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/release/observer"
+        "../../target/bpfel-unknown-none/debug/observer"
     ))?;
     #[cfg(not(debug_assertions))]
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/observer"
     ))?;
 
-    // 2. 加载并挂载 KProbe (Entry)
-    let program: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
-    program.load()?;
-    program.attach("tcp_sendmsg", 0)?;
-    info!("Attached tcp_sendmsg entry probe");
+    // 4. 挂载探针
+    let func = &config.probes.target_func;
+    info!("🪝 Hooking into: {}", func);
+    let p_entry: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
+    p_entry.load()?;
+    p_entry.attach(func, 0)?;
 
-    // 3. 加载并挂载 KRetProbe (Return)
-    let program: &mut KProbe = bpf.program_mut("tcp_sendmsg_return").unwrap().try_into()?;
-    program.load()?;
-    program.attach("tcp_sendmsg", 0)?;
-    info!("Attached tcp_sendmsg return probe");
+    let p_return: &mut KProbe = bpf.program_mut("tcp_sendmsg_return").unwrap().try_into()?;
+    p_return.load()?;
+    p_return.attach(func, 0)?;
 
-    // 4. 读取 Perf Buffer
+    // 5. 读取 Perf Buffer
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
 
-    info!("Waiting for events...");
-    if let Some(p) = opt.pid {
-        info!("Filtering for TGID (Main Process ID): {}", p);
-    } else {
-        info!("No PID filter (showing all TCP traffic)");
-    }
-
     for cpu_id in online_cpus()? {
-        let mut buf = perf_array.open(cpu_id, None)?;
-        let target_pid = opt.pid;
+        let mut buf = perf_array.open(cpu_id, Some(config.settings.perf_pages))?;
+
+        let t_tgid = target_tgid;
+        let includes = config.filters.include_names.clone();
+        let excludes = config.filters.exclude_names.clone();
 
         tokio::spawn(async move {
             let mut buffers = (0..10)
                 .map(|_| BytesMut::with_capacity(1024))
                 .collect::<Vec<_>>();
-
             loop {
-                // 读取事件
+                // 系统里所有的 TCP 发送事件
                 let events = buf.read_events(&mut buffers).await.unwrap();
-
                 for i in 0..events.read {
-                    let buf = &mut buffers[i];
-                    let ptr = buf.as_ptr() as *const TcpEvent;
-                    let event = unsafe { ptr.read_unaligned() };
+                    // 把字节数组强转为结构体
+                    let event: TcpEvent =
+                        unsafe { (buffers[i].as_ptr() as *const TcpEvent).read_unaligned() };
 
-                    // 解析进程名
+                    // 解析 command 字段
                     let comm = std::str::from_utf8(&event.comm)
-                        .unwrap_or("<unknown>")
+                        .unwrap_or("?")
                         .trim_end_matches('\0');
 
-                    // 过滤与打印逻辑
-                    if let Some(target) = target_pid {
-                        // 使用 event.tgid (主进程ID) 进行过滤
+                    // --- 过滤规则 ---
+
+                    // 规则 1: 指定了目标 PID,只看该 PID
+                    if let Some(target) = t_tgid {
                         if event.tgid != target {
-                            // 保持调试输出来确认我们捕获到了正确的 TGID
-                            // if comm.contains("tokio-runtime") || comm.contains("websocket") {
-                            //     // 打印 Mismatch 只是调试,真正的目标是打印 SEND
-                            // }
-                            if comm.contains("tokio")
-                                || comm.contains("websocket")
-                                || comm.contains("press")
-                            {
-                                println!(
-                                    "[DEBUG] PID Mismatch! Event TGID: {}, Target: {}, Comm: {}",
-                                    event.tgid, target, comm
-                                );
-                            }
                             continue;
                         }
                     }
 
-                    // 只有 TGID 匹配时才会到达这里
+                    // 规则 2: 黑名单过滤 (Exclude)
+                    if !excludes.is_empty() && excludes.iter().any(|name| comm.contains(name)) {
+                        continue;
+                    }
+
+                    // 规则 3: 白名单过滤 (Include)
+                    if !includes.is_empty() && !includes.iter().any(|name| comm.contains(name)) {
+                        continue;
+                    }
+
                     println!(
-                        "[SEND] PID: {:<6} Comm: {:<12} Size: {:<6} bytes | Latency: {:<6} ns",
+                        "[SEND] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
                         event.pid, comm, event.len, event.duration_ns
                     );
                 }
@@ -107,7 +171,5 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     signal::ctrl_c().await?;
-    info!("Exiting...");
-
     Ok(())
 }
