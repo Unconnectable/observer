@@ -50,18 +50,12 @@ cargo build --release -p observer
 
 USER_BIN="target/release/observer"
 if [ -f "$USER_BIN" ]; then
-    echo "✅ 用户态程序构建成功: $USER_BIN"
+    echo "✅ build user mode success: $USER_BIN"
 else
-    echo "❌ 用户态构建失败"
+    echo "❌ build user mode failed"
     exit 1
 fi
 
 # === 6. 运行观测器(可选)===
-echo "💡 使用以下命令运行 observer 观测所有进程:"
+echo "💡 run as below :"
 echo "    sudo RUST_LOG=info $USER_BIN"
-
-# 如果你想自动运行,取消下一行注释
-# sudo RUST_LOG=info "$USER_BIN"
-
-#sudo RUST_LOG=info ./target/release/observer --pid $(pgrep -n websocket)
-#sudo RUST_LOG=info ./target/release/observer #观测所有

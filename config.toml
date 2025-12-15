@@ -15,7 +15,7 @@ auto_detect_name = "EMSDJKDHSKJ"
 [filters]
 # 【白名单】只显示名字中包含以下关键词的进程流量。如果为空，则允许所有。
 # 比如填入 ["tokio", "websocket"]
-include_names = ["tokio"]
+include_names = ["node"]
 
 # 【黑名单】绝对不显示名字中包含以下关键词的进程流量。
 # 比如排除掉 IDE 的干扰：["node", "ssh", "bash"]

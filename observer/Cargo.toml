@@ -17,9 +17,11 @@ libc = "0.2"
 
 config = "0.13"
 serde = { version = "1.0", features = ["derive"] }
-sysinfo = "0.29" # 用于查找进程
+sysinfo = "0.29"
 
-# 新增这一块！
+# 用于生成时间戳文件夹
+chrono = "0.4"
+
 [build-dependencies]
 anyhow = "1"
 aya-build = "0.1"

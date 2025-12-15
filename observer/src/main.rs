@@ -1,15 +1,18 @@
+mod logger; // +++ 引入新模块
+
 use aya::{
     include_bytes_aligned, maps::perf::AsyncPerfEventArray, programs::KProbe, util::online_cpus,
     Bpf,
 };
 use bytes::BytesMut;
 use log::{error, info, warn};
+use logger::TrafficLogger;
 use observer_common::TcpEvent;
 use serde::Deserialize;
+use std::fs; // fs 模块拷贝 config.toml
 use sysinfo::{PidExt, ProcessExt, System, SystemExt};
-use tokio::signal;
+use tokio::signal; // +++ 使用 Logger
 
-// --- 重新设计的配置结构 ---
 #[derive(Debug, Deserialize)]
 struct AppConfig {
     probes: ProbesConfig,
@@ -40,7 +43,7 @@ struct SettingsConfig {
     perf_pages: usize,
 }
 
-// 自动发现函数
+// 找指定的pid
 fn find_target_tgid(config: &DiscoveryConfig) -> Option<u32> {
     if let Some(pid) = config.force_pid {
         info!("🎯 Target force-set to PID: {}", pid);
@@ -78,7 +81,15 @@ fn find_target_tgid(config: &DiscoveryConfig) -> Option<u32> {
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
 
-    // 1. 加载并解析配置 config.toml
+    // 初始化文件日志系统 (按月/日分类)
+    let logger = TrafficLogger::init()?;
+
+    // 2. +++ 备份配置文件到当次运行目录
+    if let Err(e) = fs::copy("config.toml", logger.run_dir.join("config.toml")) {
+        warn!("⚠️ Config backup failed: {}", e);
+    }
+
+    // 3. 加载并解析配置 config.toml
     let settings = config::Config::builder()
         .add_source(config::File::with_name("config"))
         .build()?;
@@ -88,13 +99,13 @@ async fn main() -> Result<(), anyhow::Error> {
         config.filters.include_names, config.filters.exclude_names
     );
 
-    // 2. 寻找要监测的pid
+    // 4. 寻找要监测的pid
     let target_tgid = find_target_tgid(&config.discovery);
     if target_tgid.is_none() {
         warn!("🌐 Running in GLOBAL mode (Filtered by names only)");
     }
 
-    // 3. 加载 eBPF 字节码
+    // 5. 加载 eBPF 字节码
     #[cfg(debug_assertions)]
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/debug/observer"
@@ -104,7 +115,7 @@ async fn main() -> Result<(), anyhow::Error> {
         "../../target/bpfel-unknown-none/release/observer"
     ))?;
 
-    // 4. 挂载探针
+    // 6. 挂载探针
     let func = &config.probes.target_func;
     info!("🪝 Hooking into: {}", func);
     let p_entry: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
@@ -115,7 +126,7 @@ async fn main() -> Result<(), anyhow::Error> {
     p_return.load()?;
     p_return.attach(func, 0)?;
 
-    // 5. 读取 Perf Buffer
+    // 7. 读取 Perf Buffer
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
 
     for cpu_id in online_cpus()? {
@@ -124,6 +135,9 @@ async fn main() -> Result<(), anyhow::Error> {
         let t_tgid = target_tgid;
         let includes = config.filters.include_names.clone();
         let excludes = config.filters.exclude_names.clone();
+
+        // +++ 克隆 logger 指针传给异步任务
+        let file_logger = logger.clone();
 
         tokio::spawn(async move {
             let mut buffers = (0..10)
@@ -144,7 +158,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                     // --- 过滤规则 ---
 
-                    // 规则 1: 指定了目标 PID,只看该 PID
+                    // 规则 1: 只看 指定 PID
                     if let Some(target) = t_tgid {
                         if event.tgid != target {
                             continue;
@@ -161,15 +175,20 @@ async fn main() -> Result<(), anyhow::Error> {
                         continue;
                     }
 
-                    println!(
+                    let log_line = format!(
                         "[SEND] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
                         event.pid, comm, event.len, event.duration_ns
                     );
+
+                    // +++ 双写：屏幕一份，文件一份 +++
+                    println!("{}", log_line);
+                    file_logger.log(&log_line);
                 }
             }
         });
     }
 
     signal::ctrl_c().await?;
+    info!("👋 Exiting...");
     Ok(())
 }
