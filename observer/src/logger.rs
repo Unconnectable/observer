@@ -15,10 +15,10 @@ impl TrafficLogger {
     pub fn init() -> Result<Self> {
         let now = chrono::Local::now();
 
-        // 1. 第一级目录: 年-月 (YYYY-MM)
+        // 1. 年-月 (YYYY-MM)
         let month_str = now.format("%Y-%m").to_string();
 
-        // 2. 第二级目录: 日_时-分-秒_run (DD_HH-MM-SS_run)
+        // 2. 日_时-分-秒_run (DD_HH-MM-SS_run)
         let run_id = now.format("%d_%H-%M-%S_run").to_string();
 
         // 路径拼接: results/2025-12/15_09-30-00_run/
@@ -32,8 +32,7 @@ impl TrafficLogger {
         let file_path = run_dir.join("traffic.log");
         let file = File::create(&file_path).context("Failed to create log file")?;
 
-        // 打印提示，让用户知道数据存哪了
-        // 使用 println! 而不是 log::info! 确保这一行一定能看到
+        //  println! 显示日志存放路径 而不是 log::info! 确保这一行一定能看到
         println!("📂 Logging to: {:?}", run_dir);
 
         Ok(Self {

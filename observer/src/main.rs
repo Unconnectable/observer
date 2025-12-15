@@ -11,7 +11,7 @@ use observer_common::TcpEvent;
 use serde::Deserialize;
 use std::fs; // fs 模块拷贝 config.toml
 use sysinfo::{PidExt, ProcessExt, System, SystemExt};
-use tokio::signal; // +++ 使用 Logger
+use tokio::signal;
 
 #[derive(Debug, Deserialize)]
 struct AppConfig {
@@ -81,10 +81,10 @@ fn find_target_tgid(config: &DiscoveryConfig) -> Option<u32> {
 async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
 
-    // 初始化文件日志系统 (按月/日分类)
+    // 1. 初始化文件日志系统 (按月/日分类)
     let logger = TrafficLogger::init()?;
 
-    // 2. +++ 备份配置文件到当次运行目录
+    // 2. 备份配置文件到当次运行目录
     if let Err(e) = fs::copy("config.toml", logger.run_dir.join("config.toml")) {
         warn!("⚠️ Config backup failed: {}", e);
     }
@@ -94,15 +94,27 @@ async fn main() -> Result<(), anyhow::Error> {
         .add_source(config::File::with_name("config"))
         .build()?;
     let config: AppConfig = settings.try_deserialize()?;
-    info!(
+
+    // [优化] 将过滤规则同时也写入日志文件
+    let config_msg = format!(
         "📋 Filter Rules: Include {:?}, Exclude {:?}",
         config.filters.include_names, config.filters.exclude_names
     );
+    info!("{}", config_msg);
+    logger.log(&config_msg);
 
     // 4. 寻找要监测的pid
     let target_tgid = find_target_tgid(&config.discovery);
-    if target_tgid.is_none() {
-        warn!("🌐 Running in GLOBAL mode (Filtered by names only)");
+
+    // [优化] 将 PID 锁定状态写入日志文件
+    if let Some(tgid) = target_tgid {
+        let msg = format!("✅ Target PID Locked: {}", tgid);
+        // info! 已经在 find_target_tgid 里打印过了,这里只写文件
+        logger.log(&msg);
+    } else {
+        let msg = "🌐 Running in GLOBAL mode (Filtered by names only)";
+        warn!("{}", msg);
+        logger.log(msg);
     }
 
     // 5. 加载 eBPF 字节码
@@ -117,7 +129,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // 6. 挂载探针
     let func = &config.probes.target_func;
-    info!("🪝 Hooking into: {}", func);
+
+    // 将挂载点写入日志文件
+    let hook_msg = format!("🪝 Hooking into: {}", func);
+    info!("{}", hook_msg);
+    logger.log(&hook_msg);
+
     let p_entry: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
     p_entry.load()?;
     p_entry.attach(func, 0)?;
@@ -129,6 +146,10 @@ async fn main() -> Result<(), anyhow::Error> {
     // 7. 读取 Perf Buffer
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
 
+    // 记录开始运行
+    let start_msg = "🚀 Observer is running. Capturing events...";
+    logger.log(start_msg);
+
     for cpu_id in online_cpus()? {
         let mut buf = perf_array.open(cpu_id, Some(config.settings.perf_pages))?;
 
@@ -136,7 +157,7 @@ async fn main() -> Result<(), anyhow::Error> {
         let includes = config.filters.include_names.clone();
         let excludes = config.filters.exclude_names.clone();
 
-        // +++ 克隆 logger 指针传给异步任务
+        // 克隆 logger 传给异步任务
         let file_logger = logger.clone();
 
         tokio::spawn(async move {
@@ -180,7 +201,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         event.pid, comm, event.len, event.duration_ns
                     );
 
-                    // +++ 双写：屏幕一份，文件一份 +++
+                    // +++ 双写:屏幕一份,文件一份 +++
                     println!("{}", log_line);
                     file_logger.log(&log_line);
                 }
@@ -189,6 +210,11 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     signal::ctrl_c().await?;
-    info!("👋 Exiting...");
+
+    // 记录退出
+    let exit_msg = "👋 Exiting...";
+    info!("{}", exit_msg);
+    logger.log(exit_msg);
+
     Ok(())
 }
