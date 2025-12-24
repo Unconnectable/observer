@@ -1,13 +1,16 @@
 # 1. 挂载配置
 [probes]
-# 内核函数名 (tcp_sendmsg 或 tcp_sendmsg_locked)
+# 内核函数名 (tcp_sendmsg or  tcp_sendmsg_locked)
+#sudo grep tcp_recv /proc/kallsyms    
 target_func = "tcp_sendmsg"
+recv_func = "sock_recvmsg"
+#recv_func = "tcp_recvmsg_locked"
 
 # 2. 目标发现配置
 [discovery]
 # 自动发现目标进程名。如果想进入全量模式，请留空 "" 或填入不存在的名字。
 # auto_detect_name = "websocket"
-auto_detect_name = "EMSDJKDHSKJ"
+auto_detect_name = ""
 # 也可以直接指定 PID，如果指定了 PID，则忽略上面的自动发现
 # force_pid = 12345
 
@@ -15,11 +18,11 @@ auto_detect_name = "EMSDJKDHSKJ"
 [filters]
 # 【白名单】只显示名字中包含以下关键词的进程流量。如果为空，则允许所有。
 # 比如填入 ["tokio", "websocket"]
-include_names = ["node"]
+include_names = []
 
 # 【黑名单】绝对不显示名字中包含以下关键词的进程流量。
 # 比如排除掉 IDE 的干扰：["node", "ssh", "bash"]
-exclude_names = []
+exclude_names = ["node"]
 # exclude_names = ["node", "ssh", "bash"]
 # 4. 性能调优
 [settings]

@@ -15,9 +15,13 @@ use observer_common::{TcpEvent, TrafficDirection};
 #[map]
 static EVENTS: PerfEventArray<TcpEvent> = PerfEventArray::new(0);
 
-// Map 大小设为 10240
+// tcp_sendmsg 存储时间的map
 #[map]
 static SEND_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
+
+// tcp_recvmsg 存储时间的map
+#[map]
+static RECV_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
 
 // --- 调试辅助函数 ---
 // 保持注释状态
@@ -38,17 +42,42 @@ pub fn tcp_sendmsg_entry(_ctx: ProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let start_time = unsafe { bpf_ktime_get_ns() };
 
-    if let Err(_e) = SEND_START.insert(&pid_tgid, &start_time, 0) {
+    if let Err(_e) = SEND_START.insert(&pid_tgid, &start_time, 0u64) {
         // map 满了
+        // 目前什么也不做
     }
     0
 }
 
 #[kretprobe]
-pub fn tcp_sendmsg_return(ctx: RetProbeContext) -> u32 {
+pub fn tcp_sendmsg_return(_ctx: RetProbeContext) -> u32 {
+    handle_return(_ctx, &SEND_START, TrafficDirection::Egress)
+}
+
+#[kprobe]
+pub fn tcp_recvmsg_entry(_ctx: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let start_time = unsafe { bpf_ktime_get_ns() };
+
+    if let Err(_e) = RECV_START.insert(&pid_tgid, &start_time, 0) {}
+
+    0
+}
+
+#[kretprobe]
+pub fn tcp_recvmsg_return(_ctx: RetProbeContext) -> u32 {
+    handle_return(_ctx, &RECV_START, TrafficDirection::Ingress)
+}
+#[inline(always)]
+
+pub fn handle_return(
+    ctx: RetProbeContext,
+    map: &HashMap<u64, u64>,
+    direction: TrafficDirection,
+) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
 
-    if let Some(start_time) = unsafe { SEND_START.get(&pid_tgid) } {
+    if let Some(start_time) = unsafe { map.get(&pid_tgid) } {
         let end_time = unsafe { bpf_ktime_get_ns() };
         let duration_ns = end_time - *start_time;
         let ret: i32 = ctx.ret::<i32>();
@@ -67,14 +96,14 @@ pub fn tcp_sendmsg_return(ctx: RetProbeContext) -> u32 {
                 pid,
                 tgid,
                 len: ret as usize,
-                direction: TrafficDirection::Egress,
+                direction, // send or recv
                 duration_ns,
                 comm,
             };
 
             EVENTS.output(&ctx, &event, 0);
         }
-        let _ = SEND_START.remove(&pid_tgid);
+        let _ = map.remove(&pid_tgid);
     }
     0
 }

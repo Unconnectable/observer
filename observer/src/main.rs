@@ -1,13 +1,14 @@
-mod logger; // +++ 引入新模块
+mod logger; //  自定义如何输出日志
 
 use aya::{
     include_bytes_aligned, maps::perf::AsyncPerfEventArray, programs::KProbe, util::online_cpus,
     Bpf,
 };
 use bytes::BytesMut;
+use chrono::format::format;
 use log::{error, info, warn};
 use logger::TrafficLogger;
-use observer_common::TcpEvent;
+use observer_common::{TcpEvent, TrafficDirection};
 use serde::Deserialize;
 use std::fs; // fs 模块拷贝 config.toml
 use sysinfo::{PidExt, ProcessExt, System, SystemExt};
@@ -24,6 +25,7 @@ struct AppConfig {
 #[derive(Debug, Deserialize)]
 struct ProbesConfig {
     target_func: String,
+    recv_func: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,7 +97,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .build()?;
     let config: AppConfig = settings.try_deserialize()?;
 
-    // [优化] 将过滤规则同时也写入日志文件
+    // 将过滤规则同时也写入日志文件
     let config_msg = format!(
         "📋 Filter Rules: Include {:?}, Exclude {:?}",
         config.filters.include_names, config.filters.exclude_names
@@ -106,7 +108,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // 4. 寻找要监测的pid
     let target_tgid = find_target_tgid(&config.discovery);
 
-    // [优化] 将 PID 锁定状态写入日志文件
+    // 将 PID 锁定状态写入日志文件
     if let Some(tgid) = target_tgid {
         let msg = format!("✅ Target PID Locked: {}", tgid);
         // info! 已经在 find_target_tgid 里打印过了,这里只写文件
@@ -127,21 +129,34 @@ async fn main() -> Result<(), anyhow::Error> {
         "../../target/bpfel-unknown-none/release/observer"
     ))?;
 
-    // 6. 挂载探针
-    let func = &config.probes.target_func;
+    // 6. 挂载探针 tcp_send
+    let send_func = &config.probes.target_func;
 
     // 将挂载点写入日志文件
-    let hook_msg = format!("🪝 Hooking into: {}", func);
-    info!("{}", hook_msg);
-    logger.log(&hook_msg);
-
     let p_entry: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
     p_entry.load()?;
-    p_entry.attach(func, 0)?;
+    p_entry.attach(send_func, 0)?;
 
     let p_return: &mut KProbe = bpf.program_mut("tcp_sendmsg_return").unwrap().try_into()?;
     p_return.load()?;
-    p_return.attach(func, 0)?;
+    p_return.attach(send_func, 0)?;
+
+    // 挂载探针 tcp_recv
+
+    let recv_func = &config.probes.recv_func;
+    info!("🪝 Hooking into: {}", recv_func);
+
+    let p_entry: &mut KProbe = bpf.program_mut("tcp_recvmsg_entry").unwrap().try_into()?;
+    p_entry.load()?;
+    p_entry.attach(send_func, 0)?;
+
+    let p_return: &mut KProbe = bpf.program_mut("tcp_recvmsg_return").unwrap().try_into()?;
+    p_return.load()?;
+    p_return.attach(send_func, 0)?;
+
+    let hook_msg = format!("🪝 Hooking Send: {}, Recv: {}", send_func, recv_func);
+    info!("{}", hook_msg);
+    logger.log(&hook_msg);
 
     // 7. 读取 Perf Buffer
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
@@ -177,28 +192,30 @@ async fn main() -> Result<(), anyhow::Error> {
                         .unwrap_or("?")
                         .trim_end_matches('\0');
 
-                    // --- 过滤规则 ---
+                    // 过滤规则
 
-                    // 规则 1: 只看 指定 PID
+                    // 只看 指定 PID
                     if let Some(target) = t_tgid {
                         if event.tgid != target {
                             continue;
                         }
                     }
 
-                    // 规则 2: 黑名单过滤 (Exclude)
                     if !excludes.is_empty() && excludes.iter().any(|name| comm.contains(name)) {
                         continue;
                     }
 
-                    // 规则 3: 白名单过滤 (Include)
                     if !includes.is_empty() && !includes.iter().any(|name| comm.contains(name)) {
                         continue;
                     }
 
+                    let dir_str = match event.direction {
+                        TrafficDirection::Egress => "SEND",
+                        TrafficDirection::Ingress => "RECV",
+                    };
                     let log_line = format!(
-                        "[SEND] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
-                        event.pid, comm, event.len, event.duration_ns
+                        "[{}] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
+                        dir_str, event.pid, comm, event.len, event.duration_ns
                     );
 
                     // +++ 双写:屏幕一份,文件一份 +++
@@ -211,7 +228,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     signal::ctrl_c().await?;
 
-    // 记录退出
+    // 退出
     let exit_msg = "👋 Exiting...";
     info!("{}", exit_msg);
     logger.log(exit_msg);
