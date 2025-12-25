@@ -27,6 +27,7 @@ struct ProbesConfig {
     target_func: String,
     recv_func: String,
     accept_func: String,
+    retransmit_func: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,58 +131,78 @@ async fn main() -> Result<(), anyhow::Error> {
         "../../target/bpfel-unknown-none/release/observer"
     ))?;
 
-    // 挂载探针 tcp_send
+    //  TCP Send 挂载探针
     let send_func = &config.probes.target_func;
+    info!("🪝 Hooking Send: tcp_sendmsg_entry/return -> {}", send_func);
 
-    // 将挂载点写入日志文件
-    let p_entry: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
-    p_entry.load()?;
-    p_entry.attach(send_func, 0)?;
+    let send_entry: &mut KProbe = bpf.program_mut("tcp_sendmsg_entry").unwrap().try_into()?;
+    send_entry.load()?;
+    send_entry.attach(send_func, 0)?;
 
-    let p_return: &mut KProbe = bpf.program_mut("tcp_sendmsg_return").unwrap().try_into()?;
-    p_return.load()?;
-    p_return.attach(send_func, 0)?;
+    let send_return: &mut KProbe = bpf.program_mut("tcp_sendmsg_return").unwrap().try_into()?;
+    send_return.load()?;
+    send_return.attach(send_func, 0)?;
 
-    // 挂载探针 tcp_recv
+    // TCP Recv
     let recv_func = &config.probes.recv_func;
-    info!("🪝 Hooking into: {}", recv_func);
+    info!("🪝 Hooking Recv: tcp_recvmsg_entry/return -> {}", recv_func);
 
-    let p_entry: &mut KProbe = bpf.program_mut("tcp_recvmsg_entry").unwrap().try_into()?;
-    p_entry.load()?;
-    p_entry.attach(recv_func, 0)?;
+    let recv_entry: &mut KProbe = bpf.program_mut("tcp_recvmsg_entry").unwrap().try_into()?;
+    recv_entry.load()?;
+    recv_entry.attach(recv_func, 0)?;
 
-    let p_return: &mut KProbe = bpf.program_mut("tcp_recvmsg_return").unwrap().try_into()?;
-    p_return.load()?;
-    p_return.attach(recv_func, 0)?;
+    let recv_return: &mut KProbe = bpf.program_mut("tcp_recvmsg_return").unwrap().try_into()?;
+    recv_return.load()?;
+    recv_return.attach(recv_func, 0)?;
 
-    // 挂载 accept 探针
+    //  TCP Accept
     let accept_func = &config.probes.accept_func;
+    info!(
+        "🪝 Hooking Accept: inet_csk_accept_entry/return -> {}",
+        accept_func
+    );
 
-    let p_accept_entry: &mut KProbe = bpf
+    let accept_entry: &mut KProbe = bpf
         .program_mut("inet_csk_accept_entry")
         .unwrap()
         .try_into()?;
-    p_accept_entry.load()?;
-    p_accept_entry.attach(accept_func, 0)?;
+    accept_entry.load()?;
+    accept_entry.attach(accept_func, 0)?;
 
-    let p_accept_return: &mut KProbe = bpf
+    let accept_return: &mut KProbe = bpf
         .program_mut("inet_csk_accept_return")
         .unwrap()
         .try_into()?;
-    p_accept_return.load()?;
-    p_accept_return.attach(accept_func, 0)?;
+    accept_return.load()?;
+    accept_return.attach(accept_func, 0)?;
 
-    // wrting hooked functions to log file
+    //  TCP Retransmit
+    let retrans_func = &config.probes.retransmit_func;
+    info!(
+        "🪝 Hooking Retransmit: tcp_retransmit_skb_entry -> {}",
+        retrans_func
+    );
+
+    let retrans_entry: &mut KProbe = bpf
+        .program_mut("tcp_retransmit_skb_entry")
+        .unwrap()
+        .try_into()?;
+    retrans_entry.load()?;
+    retrans_entry.attach(retrans_func, 0)?;
+
+    //  汇总日志
+
     let hook_msg = format!(
-        "🪝 Hooking Send: {}, Recv: {}, Accept: {}",
-        send_func, recv_func, accept_func
+        "🪝 Hooks Active: Send({}), Recv({}), Accept({}), Retrans({})",
+        send_func, recv_func, accept_func, retrans_func
     );
     info!("{}", hook_msg);
     logger.log(&hook_msg);
-    // 7. 读取 Perf Buffer
+
+    // 读取 Perf Buffer
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
 
-    // 记录开始运行
+    // start logging loop
     let start_msg = "🚀 Observer is running. Capturing events...";
     logger.log(start_msg);
 
@@ -230,6 +251,12 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
 
                     let log_line = match event.direction {
+                        TrafficDirection::Retransmit => {
+                            format!(
+                                "🚨 [RETRANSMIT] PID: {:<6} Comm: {:<16} | Packet Lost!",
+                                event.pid, comm
+                            )
+                        }
                         TrafficDirection::Accept => {
                             format!(
                                 "[NEW CONN] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
@@ -249,7 +276,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         }
                     };
 
-                    // +++ 双写:屏幕一份,文件一份 +++
+                    // 双写:屏幕一份,日志文件文件一份
                     println!("{}", log_line);
                     file_logger.log(&log_line);
                 }

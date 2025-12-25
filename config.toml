@@ -7,7 +7,7 @@ recv_func = "sock_recvmsg"
 #recv_func = "tcp_recvmsg_locked"
 
 accept_func = "inet_csk_accept"
-
+retransmit_func = "tcp_retransmit_skb"
 # 2. 目标发现配置
 [discovery]
 # 自动发现目标进程名。如果想进入全量模式，请留空 "" 或填入不存在的名字。
@@ -22,8 +22,9 @@ auto_detect_name = ""
 include_names = []
 
 # 【黑名单】绝对不显示名字中包含以下关键词的进程流量。
-# 比如排除掉 IDE 的干扰：["node", "ssh", "bash"]nxclude_names = []
-#exclude_names = ["node" ,"init","Relay","GnsPortTracker","kworker"]
+# 比如排除掉 IDE 的干扰：["node", "ssh", "bash"]
+# exclude_names = []
+exclude_names = ["node", "init", "Relay", "GnsPortTracker", "kworker"]
 # exclude_names = ["node", "ssh", "bash"]
 # 4. 性能调优
 [settings]

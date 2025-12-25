@@ -42,6 +42,31 @@ unsafe fn debug_print(msg: &[u8]) {
 // ------------------
 
 #[kprobe]
+pub fn tcp_retransmit_skb_entry(_ctx: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let tgid = (pid_tgid >> 32) as u32;
+    let pid = pid_tgid as u32;
+
+    let comm = match bpf_get_current_comm() {
+        Ok(c) => c,
+        Err(_) => [0; 16],
+    };
+
+    // 重传事件, 实际从 skb 读取,暂时为0
+    let event = TcpEvent {
+        pid,
+        tgid,
+        len: 0,
+        direction: TrafficDirection::Retransmit,
+        duration_ns: 0,
+        comm,
+    };
+
+    EVENTS.output(&_ctx, &event, 0);
+    0
+}
+
+#[kprobe]
 pub fn inet_csk_accept_entry(_ctx: ProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let start_time = unsafe { bpf_ktime_get_ns() };

@@ -5,9 +5,10 @@
 #[repr(u32)]
 // 保证通信双方对数据大小的认知绝对一致
 pub enum TrafficDirection {
-    Ingress = 0, // recv
-    Egress = 1,  // send
-    Accept = 2,  // accept connection
+    Ingress = 0,    // recv
+    Egress = 1,     // send
+    Accept = 2,     // accept connection
+    Retransmit = 3, // retransmit
 }
 
 /// send to user mode event structure
