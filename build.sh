@@ -4,13 +4,18 @@ set -e  # 遇到任何错误立即退出
 
 echo "start building user and kernel"
 
-# # === 1. 确保必要依赖已安装 ===
+# # if all done before, could skip  update and install again
+
+# # 1. install all dependencies
+# echo "📦 installing dependencies ..."
+
+# # === install cc and build-essential ===
 # if ! command -v cc &> /dev/null; then
 #     echo "missing cc ! build-essential..."
 #     sudo apt update && sudo apt install -y build-essential
 # fi
 
-# # === 2. 安装 bpf-linker(如果未安装)===
+# # === install bpf-linker ===
 # if ! command -v bpf-linker &> /dev/null; then
 #     echo "installing bpf-linker..."
 #     cargo install bpf-linker
@@ -18,15 +23,17 @@ echo "start building user and kernel"
 #     echo "✅ bpf-linker installed: $(which bpf-linker)"
 # fi
 
-# # === 3. 确保 nightly 工具链及 rust-src 组件 ===
+# # === install nightly toolchain and rust-src components ===
 # echo "🔧 Rust nightly tool-chain ..."
 # rustup toolchain install nightly --profile minimal --force-non-host || true
 
 # echo "📥 rust-src componet ..."
 # rustup component add rust-src --toolchain nightly
 
-# === 4. 构建 eBPF 程序 ===
-echo "🔨 building eBPF  (observer-ebpf)..."
+# build steps
+
+# === build eBPF program ===
+echo "🔨 building eBPF kernel mode (observer-ebpf)..."
 cargo +nightly build \
     --release \
     -p observer-ebpf \
@@ -34,7 +41,7 @@ cargo +nightly build \
     -Z build-std=core,alloc \
     -Z build-std-features=compiler-builtins-mem
 
-# 输出 BPF 对象文件位置
+# show BPF object file location
 BPF_BIN="target/bpfel-unknown-none/release/observer"
 if [ -f "$BPF_BIN" ]; then
     echo "✅ eBPF success: $BPF_BIN"
@@ -44,7 +51,7 @@ else
     exit 1
 fi
 
-# === 5. 构建用户态程序 ===
+# === build user mode program ===
 echo "👤 build user mode (observer)..."
 cargo build --release -p observer
 
@@ -56,6 +63,6 @@ else
     exit 1
 fi
 
-# === 6. 运行观测器(可选)===
+# === 6. run observer ===
 echo "💡 run as below :"
 echo "    sudo RUST_LOG=info $USER_BIN"

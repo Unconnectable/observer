@@ -26,6 +26,7 @@ struct AppConfig {
 struct ProbesConfig {
     target_func: String,
     recv_func: String,
+    accept_func: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,7 +130,7 @@ async fn main() -> Result<(), anyhow::Error> {
         "../../target/bpfel-unknown-none/release/observer"
     ))?;
 
-    // 6. 挂载探针 tcp_send
+    // 挂载探针 tcp_send
     let send_func = &config.probes.target_func;
 
     // 将挂载点写入日志文件
@@ -142,22 +143,41 @@ async fn main() -> Result<(), anyhow::Error> {
     p_return.attach(send_func, 0)?;
 
     // 挂载探针 tcp_recv
-
     let recv_func = &config.probes.recv_func;
     info!("🪝 Hooking into: {}", recv_func);
 
     let p_entry: &mut KProbe = bpf.program_mut("tcp_recvmsg_entry").unwrap().try_into()?;
     p_entry.load()?;
-    p_entry.attach(send_func, 0)?;
+    p_entry.attach(recv_func, 0)?;
 
     let p_return: &mut KProbe = bpf.program_mut("tcp_recvmsg_return").unwrap().try_into()?;
     p_return.load()?;
-    p_return.attach(send_func, 0)?;
+    p_return.attach(recv_func, 0)?;
 
-    let hook_msg = format!("🪝 Hooking Send: {}, Recv: {}", send_func, recv_func);
+    // 挂载 accept 探针
+    let accept_func = &config.probes.accept_func;
+
+    let p_accept_entry: &mut KProbe = bpf
+        .program_mut("inet_csk_accept_entry")
+        .unwrap()
+        .try_into()?;
+    p_accept_entry.load()?;
+    p_accept_entry.attach(accept_func, 0)?;
+
+    let p_accept_return: &mut KProbe = bpf
+        .program_mut("inet_csk_accept_return")
+        .unwrap()
+        .try_into()?;
+    p_accept_return.load()?;
+    p_accept_return.attach(accept_func, 0)?;
+
+    // wrting hooked functions to log file
+    let hook_msg = format!(
+        "🪝 Hooking Send: {}, Recv: {}, Accept: {}",
+        send_func, recv_func, accept_func
+    );
     info!("{}", hook_msg);
     logger.log(&hook_msg);
-
     // 7. 读取 Perf Buffer
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
 
@@ -209,14 +229,25 @@ async fn main() -> Result<(), anyhow::Error> {
                         continue;
                     }
 
-                    let dir_str = match event.direction {
-                        TrafficDirection::Egress => "SEND",
-                        TrafficDirection::Ingress => "RECV",
+                    let log_line = match event.direction {
+                        TrafficDirection::Accept => {
+                            format!(
+                                "[NEW CONN] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
+                                event.pid, comm, event.len, event.duration_ns
+                            )
+                        }
+                        _ => {
+                            let dir_str = match event.direction {
+                                TrafficDirection::Egress => "SEND",
+                                TrafficDirection::Ingress => "RECV",
+                                _ => "UNKOWN",
+                            };
+                            format!(
+                                "[{}] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
+                                dir_str, event.pid, comm, event.len, event.duration_ns
+                            )
+                        }
                     };
-                    let log_line = format!(
-                        "[{}] PID: {:<6} Comm: {:<16} Size: {:<6} bytes | Latency: {:<6} ns",
-                        dir_str, event.pid, comm, event.len, event.duration_ns
-                    );
 
                     // +++ 双写:屏幕一份,文件一份 +++
                     println!("{}", log_line);

@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::time::Duration;
+
 use aya_ebpf::{
     cty::c_void,
     helpers::{
@@ -19,12 +21,14 @@ static EVENTS: PerfEventArray<TcpEvent> = PerfEventArray::new(0);
 #[map]
 static SEND_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
 
-// tcp_recvmsg 存储时间的map
+// tcp_recvmsg map
 #[map]
 static RECV_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
 
-// --- 调试辅助函数 ---
-// 保持注释状态
+// inet_csk_accept
+#[map]
+static ACCEPT_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
+// --- debug func ---
 /*
 unsafe fn debug_print(msg: &[u8]) {
     bpf_trace_vprintk(
@@ -36,6 +40,48 @@ unsafe fn debug_print(msg: &[u8]) {
 }
 */
 // ------------------
+
+#[kprobe]
+pub fn inet_csk_accept_entry(_ctx: ProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let start_time = unsafe { bpf_ktime_get_ns() };
+
+    if let Err(_e) = ACCEPT_START.insert(&pid_tgid, &start_time, 0u64) {}
+    0
+}
+
+#[kretprobe]
+pub fn inet_csk_accept_return(_ctx: RetProbeContext) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+
+    if let Some(start_time) = unsafe { ACCEPT_START.get(&pid_tgid) } {
+        let end_time = unsafe { bpf_ktime_get_ns() };
+        let duration_ns = end_time - *start_time;
+
+        let ret: u64 = _ctx.ret::<u64>();
+        if ret != 0 {
+            let tgid = (pid_tgid >> 32) as u32;
+            let pid = pid_tgid as u32;
+            let comm = match bpf_get_current_comm() {
+                Ok(c) => c,
+                Err(_) => [0; 16],
+            };
+
+            let event = TcpEvent {
+                pid,
+                tgid,
+                len: 0,                              // Accept 事件没有“数据长度”的概念,填 0
+                direction: TrafficDirection::Accept, // 标记为 Accept
+                duration_ns,
+                comm,
+            };
+            EVENTS.output(&_ctx, &event, 0);
+        }
+    }
+
+    let _ = ACCEPT_START.remove(&pid_tgid);
+    0
+}
 
 #[kprobe]
 pub fn tcp_sendmsg_entry(_ctx: ProbeContext) -> u32 {
