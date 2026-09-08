@@ -18,7 +18,13 @@ fi
 # === install bpf-linker ===
 if ! command -v bpf-linker &> /dev/null; then
     echo "installing bpf-linker..."
-    cargo install bpf-linker
+    # 确保 cargo-binstall 已安装
+    if ! command -v cargo-binstall &> /dev/null; then
+        echo "cargo-binstall not found, installing..."
+        cargo install cargo-binstall
+    fi
+    # 使用 binstall 下载预编译版本,-y 自动确认
+    cargo binstall bpf-linker -y
 else
     echo "✅ bpf-linker installed: $(which bpf-linker)"
 fi
