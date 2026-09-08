@@ -4,31 +4,31 @@ set -e  # 遇到任何错误立即退出
 
 echo "start building user and kernel"
 
-# # if all done before, could skip  update and install again
+# if all done before, could skip  update and install again
 
-# # 1. install all dependencies
-# echo "📦 installing dependencies ..."
+# 1. install all dependencies
+echo "📦 installing dependencies ..."
 
-# # === install cc and build-essential ===
-# if ! command -v cc &> /dev/null; then
-#     echo "missing cc ! build-essential..."
-#     sudo apt update && sudo apt install -y build-essential
-# fi
+# === install cc and build-essential ===
+if ! command -v cc &> /dev/null; then
+    echo "missing cc ! build-essential..."
+    sudo apt update && sudo apt install -y build-essential
+fi
 
-# # === install bpf-linker ===
-# if ! command -v bpf-linker &> /dev/null; then
-#     echo "installing bpf-linker..."
-#     cargo install bpf-linker
-# else
-#     echo "✅ bpf-linker installed: $(which bpf-linker)"
-# fi
+# === install bpf-linker ===
+if ! command -v bpf-linker &> /dev/null; then
+    echo "installing bpf-linker..."
+    cargo install bpf-linker
+else
+    echo "✅ bpf-linker installed: $(which bpf-linker)"
+fi
 
-# # === install nightly toolchain and rust-src components ===
-# echo "🔧 Rust nightly tool-chain ..."
-# rustup toolchain install nightly --profile minimal --force-non-host || true
+# === install nightly toolchain and rust-src components ===
+echo "🔧 Rust nightly tool-chain ..."
+rustup toolchain install nightly --profile minimal --force-non-host || true
 
-# echo "📥 rust-src componet ..."
-# rustup component add rust-src --toolchain nightly
+echo "📥 rust-src componet ..."
+rustup component add rust-src --toolchain nightly
 
 # build steps
 
