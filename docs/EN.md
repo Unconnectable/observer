@@ -1,8 +1,9 @@
-# bpf-linker 安装问题
+# bpf-linker installation issue
 
-构建 `observer` 时若手动执行 `cargo install bpf-linker`,会遇到以下错误:
+When building `observer`, installing `bpf-linker` by hand with
+`cargo install bpf-linker` commonly fails like this:
 
-```sh
+```
 warning: bpf-linker@0.11.1: Installing bpf-linker through `cargo install` is NOT recommended for regular users due to dependency on specific LLVM version, system libraries and overall complexity of getting the setup right. See https://github.com/aya-rs/bpf-linker#installation for easier installation methods.
 error: failed to run custom build command for `bpf-linker v0.11.1`
 
@@ -22,20 +23,24 @@ error: failed to compile `bpf-linker v0.11.1`, intermediate artifacts can be fou
 To reuse those artifacts with a future compilation, set the environment variable `CARGO_BUILD_BUILD_DIR` to that path.
 ```
 
-### 原因
+## Cause
 
-`bpf-linker` 依赖于 LLVM 设施,但并不是所有电脑都预装了 LLVM 开发环境,导致 `cargo install` 从源码编译失败.
+`bpf-linker` depends on LLVM, but not every machine ships an LLVM development
+environment, so building it from source via `cargo install` fails.
 
-### 解决方案
+## Solution
 
-根据 [bpf-linker 官方安装文档](https://github.com/aya-rs/bpf-linker#installation),推荐使用预编译版本安装:
+Per the [official bpf-linker installation docs](https://github.com/aya-rs/bpf-linker#installation),
+install a prebuilt binary instead:
 
 ```sh
-# 1. 安装 cargo-binstall 工具
+# 1. install the cargo-binstall helper
 cargo install cargo-binstall
 
-# 2. 使用 binstall 下载预编译的 bpf-linker 二进制文件
+# 2. fetch the prebuilt bpf-linker binary
 cargo binstall bpf-linker
 ```
 
-`build.sh` 已自动集成此方案:检测不到 `bpf-linker` 时先装 `cargo-binstall`,再用它拉取预编译版本,无需手动执行上述命令,也无需系统预装 LLVM.
+`build.sh` already does this for you: if `bpf-linker` is missing it installs
+`cargo-binstall` first and then pulls the prebuilt binary, so there is no need
+to run the commands above manually or to have LLVM installed system-wide.

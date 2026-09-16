@@ -111,8 +111,8 @@ sudo grep -E 'tcp_sendmsg|tcp_recvmsg|sock_recvmsg|tcp_retransmit' /proc/kallsym
 
 ## Documentation
 
-- [docs/CN.md](docs/CN.md) — detailed Chinese guide to the build/run scripts,
-  including the `bpf-linker` installation failure and its workaround.
+- [docs/CN.md](docs/CN.md) — 中文版 `bpf-linker` 安装失败说明与解决方案.
+- [docs/EN.md](docs/EN.md) — English version of the same troubleshooting note.
 
 ## License
 
