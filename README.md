@@ -1,36 +1,118 @@
 # observer
 
+An eBPF-based TCP traffic observer built with [Aya](https://aya-rs.dev).
+It attaches kprobes to kernel TCP functions, correlates entry/return to measure
+latency, and reports per-event traffic lines to the terminal and to disk.
+
+Probes currently attached:
+
+| Probe                        | Config key        | Reports                   |
+| :--------------------------- | :---------------- | :------------------------ |
+| `tcp_sendmsg`                | `target_func`     | `[SEND]`                  |
+| `sock_recvmsg`               | `recv_func`       | `[RECV]`                  |
+| `inet_csk_accept`            | `accept_func`     | `[NEW CONN]`              |
+| `tcp_retransmit_skb`         | `retransmit_func` | `[RETRANSMIT]`            |
+
+Each line carries PID, process name (`comm`), byte count and latency in ns.
+
 ## Prerequisites
 
-1. stable rust toolchains: `rustup toolchain install stable`
-1. nightly rust toolchains: `rustup toolchain install nightly --component rust-src`
-1. (if cross-compiling) rustup target: `rustup target add ${ARCH}-unknown-linux-musl`
-1. (if cross-compiling) LLVM: (e.g.) `brew install llvm` (on macOS)
-1. (if cross-compiling) C toolchain: (e.g.) [`brew install filosottile/musl-cross/musl-cross`](https://github.com/FiloSottile/homebrew-musl-cross) (on macOS)
-1. bpf-linker: `cargo install bpf-linker` (`--no-default-features` on macOS)
+- Linux with eBPF/BTF support, and root (loading probes requires `CAP_BPF`/`CAP_SYS_ADMIN`)
+- Rust stable toolchain
+- Rust nightly toolchain with the `rust-src` component
+- `bpf-linker`
+- `cc` / build-essential
 
-## Build & Run
+`build.sh` installs all of the above if they are missing, so you normally do not
+need to install anything by hand.
 
-Use `cargo build`, `cargo check`, etc. as normal. Run your program with:
+> **Note:** prefer `cargo binstall bpf-linker` over `cargo install bpf-linker`.
+> Building `bpf-linker` from source requires a matching LLVM development
+> environment and commonly fails with `could not find llvm-config`. See
+> [docs/CN.md](docs/CN.md) for the full error and explanation.
 
-```shell
-cargo run --release
-```
-
-Cargo build scripts are used to automatically build the eBPF correctly and include it in the
-program.
-
-## Cross-compiling on macOS
-
-Cross compilation should work on both Intel and Apple Silicon Macs.
+## Build
 
 ```shell
-CC=${ARCH}-linux-musl-gcc cargo build --package observer --release \
-  --target=${ARCH}-unknown-linux-musl \
-  --config=target.${ARCH}-unknown-linux-musl.linker=\"${ARCH}-linux-musl-gcc\"
+./build.sh
 ```
-The cross-compiled program `target/${ARCH}-unknown-linux-musl/release/observer` can be
-copied to a Linux server or VM and run there.
+
+The script is idempotent — it checks for each dependency before installing it —
+and stops at the first failure (`set -e`). It produces two artifacts:
+
+| Artifact                                     | Description                          |
+| :------------------------------------------- | :----------------------------------- |
+| `target/bpfel-unknown-none/release/observer` | eBPF kernel-side object              |
+| `target/release/observer`                    | User-space loader and event consumer |
+
+The eBPF object is embedded into the user-space binary at compile time, so both
+must be built before running. Building the kernel-side object by hand:
+
+```shell
+cargo +nightly build --release -p observer-ebpf \
+  --target bpfel-unknown-none \
+  -Z build-std=core,alloc \
+  -Z build-std-features=compiler-builtins-mem
+```
+
+## Run
+
+```shell
+sudo ./run.sh
+```
+
+`run.sh` must be executed from the repository root: the program reads
+`config.toml` relative to the current working directory and aborts if it is
+missing.
+
+To control what is observed, edit `config.toml` — **not** `run.sh`. The
+commented `--pid ...` lines still present in `run.sh` are historical; the
+program takes no command-line arguments.
+
+## Output
+
+Every run creates a timestamped directory and writes to it:
+
+```
+results/<YYYY-MM>/<DD_HH-MM-SS_run>/
+├── config.toml    # snapshot of the config used for this run
+└── traffic.log    # captured events
+```
+
+The path is printed on startup (`📂 Logging to: ...`). Events are written both
+to the terminal and to `traffic.log`. `results/` is gitignored.
+
+## Configuration
+
+`config.toml` in the repository root controls probe attachment, target
+selection and filtering.
+
+| Section     | Key                | Meaning                                                        |
+| :---------- | :----------------- | :------------------------------------------------------------- |
+| `probes`    | `target_func`      | Kernel symbol to hook for egress (default `tcp_sendmsg`)        |
+|             | `recv_func`        | Kernel symbol to hook for ingress (default `sock_recvmsg`)      |
+|             | `accept_func`      | Symbol for new connections (default `inet_csk_accept`)          |
+|             | `retransmit_func`  | Symbol for retransmissions (default `tcp_retransmit_skb`)       |
+| `discovery` | `force_pid`        | Monitor only this PID; takes precedence over auto-detection     |
+|             | `auto_detect_name` | Substring match on process name; empty string means global mode |
+| `filters`   | `include_names`    | Allowlist on `comm`; empty means allow all                      |
+|             | `exclude_names`    | Denylist on `comm`; applied before the allowlist                |
+| `settings`  | `perf_pages`       | Per-CPU perf buffer size, in pages, must be a power of two      |
+
+`discovery.auto_detect_name = ""` (global mode) combined with
+`filters.exclude_names` is the recommended setup for observing system-wide
+traffic without drowning in noise from editors, browsers and kernel workers.
+
+Available kernel symbols can be listed with:
+
+```shell
+sudo grep -E 'tcp_sendmsg|tcp_recvmsg|sock_recvmsg|tcp_retransmit' /proc/kallsyms
+```
+
+## Documentation
+
+- [docs/CN.md](docs/CN.md) — detailed Chinese guide to the build/run scripts,
+  including the `bpf-linker` installation failure and its workaround.
 
 ## License
 
