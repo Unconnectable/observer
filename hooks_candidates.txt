@@ -1,0 +1,92 @@
+# 候选钩子清单(全部已在 /proc/kallsyms 验证存在, 2026-09-26)
+# 格式: 类型 名称  一句话用途  归因
+# 类型 T=全局符号 t=局部符号(都能挂)
+# 归因 P=进程上下文, 可按进程统计   S=软中断/定时器上下文, pid 归因不可信(见 TODO 4.10)
+
+## 已挂(12 个, 全部实测出过数据, 除 RST 外)
+# T tcp_sendmsg / tcp_recvmsg / inet_csk_accept / tcp_connect / tcp_set_state
+# T tcp_send_active_reset / sk_stream_wait_memory / tcp_retransmit_skb
+# T udp_sendmsg / udp_recvmsg / udpv6_sendmsg / udpv6_recvmsg
+
+## TCP — 连接生命周期(最划算, 噪声低)
+T tcp_finish_connect    握手完成进 ESTABLISHED, 补上 SYN_SENT 与 ESTABLISHED 的缺口   P
+T tcp_done              连接彻底结束(任何路径都走它), 比 tcp_close 更全               P
+T tcp_close             应用 close() 触发的关闭                                        P
+T tcp_abort             异常中止, 带错误码                                             P
+T tcp_shutdown          shutdown() 半关闭                                              P
+T tcp_disconnect        重用 socket 时主动断开                                         P
+T tcp_reset             收到对端 RST 后本地复位 = "被对方踢了"                          P
+T tcp_time_wait         进入 TIME_WAIT, 可看端口耗尽倾向                                P
+T tcp_send_fin          发出 FIN                                                       P
+
+## TCP — 发送路径与反压(你要的"谁抢带宽"核心)
+T tcp_stream_memory_free 返回发送缓冲剩余额度, 直接量化"还能塞多少"                     P
+t tcp_wmem_schedule      发送缓冲分配; 配合 wait_memory 可区分"慢"和"完全堵住"           P
+t tcp_write_xmit         内核真正把数据交给 IP 层的位置(链路视角的起点)                   P
+t __tcp_transmit_skb     每一个真正发出的 TCP 包都过它, 是"链路字节"的正解               P
+T tcp_send_window_probe  零窗探测: 对端不收导致我发不出去                                 P
+T tcp_send_probe0        probe0 定时器, 同上语义                                         S
+
+## TCP — 接收路径与窗口
+T tcp_data_ready        内核通知应用"有数据可读"(epoll 唤醒点)                          P
+T tcp_cleanup_rbuf      应用读完后的清理, 自动调窗触发处                                 P
+t tcp_try_rmem_schedule 接收缓冲分配尝试, 失败=接收侧内存压力                            P
+T tcp_rcv_space_adjust  接收空间自动调优(有对应 tracepoint, 优先用那个)                  P
+t tcp_grow_window       窗口增长                                                       S
+t tcp_data_queue        收到的数据入队, 包级                                            S  噪声高
+T tcp_rcv_established   已建立连接的收包主入口, 包级                                     S  噪声高
+T tcp_recv_skb          从队列取skb(应用读数据的微观动作)                                P
+
+## TCP — 拥塞与丢包质量("为什么卡"最直接)
+T tcp_enter_loss        进入丢包恢复 = 一次 RTO 超时, 强信号                             S
+T tcp_enter_recovery    进入快速恢复(3 个重复 ACK 触发)                                  S
+T tcp_cwnd_reduction    拥塞窗口被削减                                                   S
+T tcp_mark_skb_lost     RACK 标记某包丢失                                                S
+T tcp_simple_retransmit 部分窗口重传(FRTO)                                               S
+T tcp_xmit_retransmit_queue 整个重传队列重发                                             S
+T tcp_send_loss_probe   尾丢包探测 TLP                                                   S
+t __tcp_retransmit_skb  单个 skb 重传, 参数带 skb => 可读重传字节数                       S
+T tcp_update_metrics    连接结束时写入 metrics 缓存, 一处能拿 srtt/minrtt/重传计数         P
+t tcp_ack_update_rtt    每次 ACK 更新 RTT                                               S  噪声极高
+T tcp_enter_memory_pressure 全局 tcp_mem 触顶, 整机级信号                                P
+
+## TCP — 定时器族(能挂, 但归因是 S, 只适合做全局计数)
+T tcp_retransmit_timer  RTO 到期重传
+T tcp_keepalive_timer   keepalive 与孤儿连接清理
+T tcp_delack_timer_handler 延迟 ACK 到期
+T tcp_syn_ack_timeout   SYN-ACK 超时(服务端半连接失败)
+
+## UDP — 补充
+T __skb_recv_udp        应用从队列取 UDP 数据报(内核实现层)                             P
+t udp_send_skb          真正把 UDP 报文发出                                             P
+T udp_push_pending_frames  v4 批量推出未决数据                                           P
+t udp_v6_push_pending_frames v6 同上                                                    P
+T udp_poll              应用 poll 一个 UDP socket(epoll 视角)                           P
+T udp_skb_destructor    数据报被释放/丢弃 —— 视频流"收不上来"的直接信号                    S
+T udp_destruct_common   同上, 共用清理路径                                               S
+t udp_rmem_release      接收内存释放                                                     S
+t udp_queue_rcv_skb     v4 入向排队(失败即丢)                                            S
+t udpv6_queue_rcv_skb   v6 入向排队                                                      S
+T udp_err / __udp4_lib_err  ICMP 错误回传(端口没人听 / 主机不可达)                        S
+T udp_abort             UDP socket 被错误中止                                            P
+T udp_disconnect        已 connect 的 UDP 解除绑定                                       P
+T __udp4_lib_rcv / __udp6_lib_rcv  入向总入口, 包级                                      S  不建议(kprobe 太吵)
+T udp_rcv / udpv6_rcv   协议分发层入口                                                   S  不建议
+
+## tracepoint(比 kprobe 更好: 内核已把字段备好, 不用猜偏移)
+tcp:tcp_probe                每次 ACK 后报告 srtt / rcv_mss / cwnd / packets_out / retrans  ← RTT 与窗口的正解
+tcp:tcp_retransmit_skb       带 saddr/daddr/sport/dport/seq/len   ← 重传"多少字节去哪"的正解
+tcp:tcp_send_reset           发出 RST, 带四元组
+tcp:tcp_receive_reset        收到 RST, 带四元组
+tcp:tcp_cong_state_set       Open/Disorder/Recovery/Loss 状态序列  ← 干净的"链路质量"时间线
+tcp:tcp_bad_csum             校验和错误的包  ← 换 WiFi 环境时"莫名卡顿"的元凶
+tcp:tcp_rcv_space_adjust     接收空间调整, 带窗口字节
+tcp:tcp_retransmit_synack    服务端 SYN-ACK 重传
+tcp:tcp_destroy_sock         连接销毁, 带四元组
+udp:udp_fail_queue_rcv_skb   UDP 入队失败(=丢包), 带 size 和 err  ← QUIC 视频流丢包的正解
+
+## 我的建议顺序
+1. tcp_finish_connect + tcp_done     先把 61 vs 38 的缺口闭合, 生命周期算完整
+2. tcp_stream_memory_free            反压的量化指标(和已挂的 wait_memory 配成一对)
+3. udp:udp_fail_queue_rcv_skb + tcp:tcp_retransmit_skb 两个 tracepoint  ← 一次解决"字节数"和"归因"两个老问题
+4. tcp_update_metrics                连接结束时一把拿到 srtt/重传总数
