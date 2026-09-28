@@ -19,7 +19,7 @@ impl<'a> Hook<'a> {
         Ok(())
     }
 
-    /// 挂上这个钩子。语义和原来手写的三段式一致: 程序名写错照样 panic,
+    /// 挂上这个钩子.语义和原来手写的三段式一致: 程序名写错照样 panic,
     /// load/attach 失败原样向上返回错误
     pub fn attach(&self, bpf: &mut Bpf) -> Result<(), anyhow::Error> {
         Self::attach_one(bpf, self.entry, self.func)?;
@@ -35,7 +35,7 @@ impl<'a> Hook<'a> {
     }
 }
 
-/// 挂载点清单。加新钩子: 内核态写出同名程序 + config 加一个键 + 这里加一条
+/// 挂载点清单.加新钩子: 内核态写出同名程序 + config 加一个键 + 这里加一条
 pub fn plan(probes: &ProbesConfig) -> Vec<Hook<'_>> {
     vec![
         Hook {

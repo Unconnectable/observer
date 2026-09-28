@@ -1,5 +1,5 @@
-//! 用测试锁住输出格式。改表或改 render 时如果输出变了, cargo test 就会红。
-//! 这是集成测试, 走 observer 这个 lib 的公开 API, 所以 main.rs 里不再有 #[cfg(test)]。
+//! 用测试锁住输出格式.改表或改 render 时如果输出变了, cargo test 就会红.
+//! 这是集成测试, 走 observer 这个 lib 的公开 API, 所以 main.rs 里不再有 #[cfg(test)].
 use observer::report::{render_event, HOOK_KINDS, LOG_SPECS};
 use observer::{TcpEvent, TrafficDirection};
 
@@ -91,7 +91,7 @@ fn table_index_matches_enum() {
     for (i, spec) in LOG_SPECS.iter().enumerate() {
         assert!(!spec.tag.is_empty(), "第 {} 行没有标签", i);
     }
-    // 抽查: 枚举值 == 表里的位置。中间插入或改动顺序都会在这里红掉
+    // 抽查: 枚举值 == 表里的位置.中间插入或改动顺序都会在这里红掉
     assert_eq!(TrafficDirection::Ingress as usize, 0);
     assert_eq!(TrafficDirection::Egress as usize, 1);
     assert_eq!(TrafficDirection::Accept as usize, 2);

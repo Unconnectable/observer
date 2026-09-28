@@ -43,3 +43,7 @@ exclude_names = ["node", "init", "Relay", "GnsPortTracker", "kworker"]
 [settings]
 # PerfBuffer 缓冲区大小 (2的幂)
 perf_pages = 64
+
+# 5. 单个 traffic.log 的上限(MB), 写满就切 traffic.2.log / traffic.3.log ...
+# 填 0 或整行删掉 = 不限. 全局模式实测每分钟约 8.5 MB, 挂机一晚是十几 GB
+max_log_mb = 64

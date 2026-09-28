@@ -1,9 +1,12 @@
 # observer
 
+[English](README.md) | [Chinese](docs/README_CN.md)
+
 An eBPF-based per-process network traffic observer built with
 [Aya](https://aya-rs.dev). It attaches kprobes/kretprobes to kernel TCP and UDP
 functions, pairs entry and return to measure how long the kernel spent on each
-call, and reports one line per event to the terminal and to disk.
+call, and writes one line per event to disk. The terminal shows a single
+self-overwriting status line that refreshes every second.
 
 ## Probes
 
@@ -11,21 +14,21 @@ Twelve hooks, all of them verified against live traffic (see
 [Measured results](#measured-results)). Labels below are exactly what appears in
 the log.
 
-| Label | Config key | Kernel function | What one line means |
-| :------------------- | :---------------------- | :------------------------- | :-------------------------------------------- |
-| `[SEND]` | `target_func` | `tcp_sendmsg` | bytes an application handed to TCP for sending |
-| `[RECV]` | `recv_func` | `tcp_recvmsg` | bytes an application took out of the TCP receive buffer |
-| `[NEW CONN]` | `accept_func` | `inet_csk_accept` | a server socket dequeued a completed connection |
-| `[TCP RETRANSMIT]` | `retransmit_func` | `tcp_retransmit_skb` | the kernel re-sent a packet that was not acknowledged |
-| `[TCP CONNECT]` | `connect_func` | `tcp_connect` | a client started a connection; carries the return code (`err=-110` on timeout) |
-| `[TCP STATE]` | `state_func` | `tcp_set_state` | one TCP state-machine transition (`-> ESTABLISHED`, `-> CLOSE_WAIT`, …) |
-| `[BACKPRESSURE]` | `backpressure_func` | `sk_stream_wait_memory` | the send buffer was full and the application was held by the kernel; `Blocked:` is how long |
-| `[RST]` | `reset_func` | `tcp_send_active_reset` | this end actively aborted a connection |
-| `[UDP4 SEND]` / `[UDP4 RECV]` | `udp_send_func` / `udp_recv_func` | `udp_sendmsg` / `udp_recvmsg` | IPv4 datagram written / read |
-| `[UDP6 SEND]` / `[UDP6 RECV]` | `udp6_send_func` / `udp6_recv_func` | `udpv6_sendmsg` / `udpv6_recvmsg` | IPv6 datagram written / read |
+| Label                         | Config key                          | Kernel function                   | What one line means                                                                         |
+| :---------------------------- | :---------------------------------- | :-------------------------------- | :------------------------------------------------------------------------------------------ |
+| `[SEND]`                      | `target_func`                       | `tcp_sendmsg`                     | bytes an application handed to TCP for sending                                              |
+| `[RECV]`                      | `recv_func`                         | `tcp_recvmsg`                     | bytes an application took out of the TCP receive buffer                                     |
+| `[NEW CONN]`                  | `accept_func`                       | `inet_csk_accept`                 | a server socket dequeued a completed connection                                             |
+| `[TCP RETRANSMIT]`            | `retransmit_func`                   | `tcp_retransmit_skb`              | the kernel re-sent a packet that was not acknowledged                                       |
+| `[TCP CONNECT]`               | `connect_func`                      | `tcp_connect`                     | a client started a connection; carries the return code (`err=-110` on timeout)              |
+| `[TCP STATE]`                 | `state_func`                        | `tcp_set_state`                   | one TCP state-machine transition (`-> ESTABLISHED`, `-> CLOSE_WAIT`, etc.)                  |
+| `[BACKPRESSURE]`              | `backpressure_func`                 | `sk_stream_wait_memory`           | the send buffer was full and the application was held by the kernel; `Blocked:` is how long |
+| `[RST]`                       | `reset_func`                        | `tcp_send_active_reset`           | this end actively aborted a connection                                                      |
+| `[UDP4 SEND]` / `[UDP4 RECV]` | `udp_send_func` / `udp_recv_func`   | `udp_sendmsg` / `udp_recvmsg`     | IPv4 datagram written / read                                                                |
+| `[UDP6 SEND]` / `[UDP6 RECV]` | `udp6_send_func` / `udp6_recv_func` | `udpv6_sendmsg` / `udpv6_recvmsg` | IPv6 datagram written / read                                                                |
 
 IPv4 and IPv6 UDP are **two separate kernel functions**; hooking only the v4
-pair silently drops all IPv6 DNS and QUIC traffic. TCP has no such split —
+pair silently drops all IPv6 DNS and QUIC traffic. TCP has no such split:
 `tcp_sendmsg` / `tcp_recvmsg` serve both families, which is why TCP lines carry
 no `4`/`6` marker yet.
 
@@ -50,7 +53,7 @@ need to install anything by hand.
 > **Note:** prefer `cargo binstall bpf-linker` over `cargo install bpf-linker`.
 > Building `bpf-linker` from source requires a matching LLVM development
 > environment and commonly fails with `could not find llvm-config`. See
-> [docs/CN.md](docs/CN.md) for the full error and explanation.
+> [docs/EN.md](docs/EN.md) for the full error and explanation.
 
 ## Build
 
@@ -58,8 +61,8 @@ need to install anything by hand.
 ./build.sh
 ```
 
-The script is idempotent — it checks for each dependency before installing it —
-and stops at the first failure (`set -e`). It produces two artifacts:
+The script is idempotent: it checks each dependency before installing it, and
+stops at the first failure (`set -e`). It produces two artifacts:
 
 | Artifact                                     | Description                          |
 | :------------------------------------------- | :----------------------------------- |
@@ -86,28 +89,53 @@ sudo ./run.sh
 `config.toml` relative to the current working directory and aborts if it is
 missing.
 
-To control what is observed, edit `config.toml` — **not** `run.sh`. The
-commented `--pid ...` lines still present in `run.sh` are historical; the
-program takes no command-line arguments.
+To control what is observed, edit `config.toml`, **not** `run.sh`. The commented
+`--pid ...` lines still present in `run.sh` are historical; the program takes no
+command-line arguments.
 
 ## Output
 
 Every run creates a timestamped directory and writes to it:
 
-```
+```sh
 results/<YYYY-MM>/<DD_HH-MM-SS_run>/
-├── config.toml    # snapshot of the config used for this run
-└── traffic.log    # captured events
+├── config.toml      # snapshot of the config used for this run
+├── traffic.log      # captured events
+├── traffic.2.log    # only if max_log_mb was reached
+└── traffic.3.log    # etc.
 ```
 
-The path is printed on startup (`📂 Logging to: ...`). Events are written both
-to the terminal and to `traffic.log`. `results/` is gitignored.
+The path is printed on startup (`📂 Logging to: ...`). Every line in the log is
+prefixed with a millisecond clock (`[14:44:43.573] ...`) so a run can later be
+cut into intervals and compared against another tool's timeline. `results/` is
+gitignored.
+
+Per-event lines go to the **file only**; the terminal shows one row that
+refreshes in place every second (measured at ~2,900 events/s it stays a single
+row and never scrolls). The row is real output from a 42 s capture:
+
+```sh
+⏱ 23s   1068.1 条/s ↓1232.7 KB/s ↑8.8 KB/s 重传 0 次
+```
+
+Field by field: elapsed seconds since startup, event rate across all twelve
+hooks, application bytes read per second, application bytes written per second,
+and how many retransmits fell in that second. The same row is appended to the
+log once per second, so the file keeps the whole time series.
+
+When a shard reaches `max_log_mb`, the writer moves on to `traffic.2.log` and
+records the switch **in the file** (not on screen, because it would chop the
+live row). That marker line is:
+
+```sh
+---- 上一片写满, 分片从这里开始: "results/2026-09/28_14-22-31_run/traffic.2.log" ----
+```
 
 Event lines and the exit summary are produced from a single table (`LOG_SPECS` in
-`observer/src/main.rs`), so the label in the summary is byte-for-byte the label in
-the log lines:
+`observer/src/report.rs`), so the label in the summary is byte-for-byte the label
+in the log lines:
 
-```
+```sh
 [TCP STATE] PID: 22918  Comm: Chrome_ChildIOT  -> SYN_SENT
 [TCP CONNECT] PID: 22918  Comm: Chrome_ChildIOT  SYN-sent | Latency: 35722  ns
 [UDP4 SEND] PID: 22918  Comm: Chrome_ChildIOT  Size: 34     bytes | Latency: 40689  ns
@@ -117,24 +145,69 @@ the log lines:
 🚧 [BACKPRESSURE] PID: 2318   Comm: WorkerThread     | Blocked: 2352   ns
 ```
 
-On exit the program prints the per-hook hit counts, again to both places:
+On exit the program first waits for the per-CPU reader tasks to drain, then
+prints derived metrics and the per-hook hit counts, to both terminal and log.
+This is real output from a 928.6 s global-mode run that was pushing ~3.2 MB/s:
 
-```
+```sh
+📈 ===== 指标 =====
+   运行时长          928.6 s
+   事件速率         2983.1 条/s
+   下行(应用字节) 2947.89 MB (3250.9 KB/s)
+   上行(应用字节) 194.99 MB (215.0 KB/s)
+   重传事件            0.5 次/s 449 次里 326 次落在软中断/网卡中断(72.6 %), 这部分拿不到真正的进程
+   发起连接            0.4 次/s
+   发不出去       28.8 µs (19 次) —— 要写的数据内核暂时收不下, 等了一会儿
 📊 ===== 钩子触发次数汇总 =====
-   RECV         4910
-   SEND         1118
-   NEW CONN     0
-   TCP RETRANSMIT 48
-   TCP CONNECT  212
-   TCP STATE    924
-   BACKPRESSURE 0
-   RST          0
-   UDP4 RECV    430
-   UDP4 SEND    430
-   UDP6 RECV    0
-   UDP6 SEND    0
-   TOTAL        8072
+   RECV           2752393
+   SEND           14790
+   NEW CONN       6
+   TCP RETRANSMIT 449
+   TCP CONNECT    366
+   TCP STATE      1315
+   BACKPRESSURE   19
+   RST            7
+   UDP4 RECV      266
+   UDP4 SEND      340
+   UDP6 RECV      0
+   UDP6 SEND      0
+   TOTAL          2769951
 ```
+
+The metrics block has seven rows, in this order:
+
+```sh
+1  运行时长        run duration
+2  事件速率        events per second, all twelve hooks summed
+3  下行(应用字节)  downlink, application bytes read + rate
+4  上行(应用字节)  uplink, application bytes written + rate
+5  重传事件        retransmit rate + how many of them are unattributable
+6  发起连接        client-side connect rate
+7  发不出去        total time the kernel held a sender, and how often
+```
+
+How to read the rows that are *not* self-evident:
+
+- **Downlink / uplink (rows 3 and 4)** count bytes the application read from or
+  wrote to the socket. They exclude TCP/IP headers (~7 % more at the NIC) and
+  retransmitted data, so they are always below what a network counter shows.
+- **Retransmits (row 5)** is the number of `tcp_retransmit_skb` **calls**, not
+  the number of packets lost, and there is no denominator available (one call
+  can re-send several segments). Treat it as an intensity, never as a loss
+  percentage. The parenthetical is computed at exit from the current run because
+  that share swings widely: measured 38.6 %, 56.1 %, 66.7 %, 72.6 % and 93.2 %
+  across five separate runs on this machine.
+- **Held by the kernel (row 7)** is how long the kernel held a sender because its
+  send buffer was full. Sub-millisecond values are routine noise; the useful
+  reading threshold measured here is **more than 1 ms for one event, or more
+  than 50 ms accumulated within one second**. Below 1 ms it is printed in
+  microseconds, and if nothing happened the row says so instead of printing
+  `0.0 ms`.
+- **Connect rate (row 6)** counts client-side `tcp_connect`; the server-side view
+  is the `NEW CONN` counter in the summary block. These two are wildly
+  asymmetric on a client machine (366 vs 6 in the run above), which is expected:
+  `inet_csk_accept` sleeps inside the kernel until a connection is actually
+  dequeued, so its return probe fires far less often than `tcp_connect`'s.
 
 ## Measured results
 
@@ -146,86 +219,105 @@ attached and no attach failures.
   alone accounted for **4,729 of the 4,910 `[RECV]` lines (96 %)**, plus 917
   `[SEND]`, 100 `[TCP CONNECT]`, 169 `[TCP STATE]`. Download-heavy shape
   (`RECV:SEND ≈ 4:1`) is exactly what video streaming should look like.
-- **Bilibili streamed over TCP, not QUIC** — UDP6 stayed at 0, and all 862 UDP
+- **Bilibili streamed over TCP, not QUIC.** UDP6 stayed at 0, and all 862 UDP
   lines (431 sent + 431 received) came from DNS resolver threads and a thread
   named `ping`. (An earlier guess of mine that the browser's ~1,357-byte UDP
   packets were QUIC video was wrong.)
 - **Retransmission and backpressure fire.** 48 `[TCP RETRANSMIT]` and, in a
   separate run, 7 `[BACKPRESSURE]` were captured. `[RST]` was verified with a
   synthetic test: 16 forced `SO_LINGER(1,0)` aborts produced exactly 16 lines.
+  In a 928 s real-world run 7 `[RST]` appeared, all of them from the same Chrome
+  IO thread, three of them inside the same millisecond.
 - Largest single read observed: 16,401 bytes.
+
+### Byte accounting checked against curl
+
+Long runs were compared against curl's own counters, and the numbers agree to
+the byte, in both directions:
+
+| What curl did                       | curl reported                             | observer reported                                                           |
+| :---------------------------------- | :---------------------------------------- | :-------------------------------------------------------------------------- |
+| 100 MB upload via `curl POST /__up` | 100,000,000 B uploaded, 1.44 MB/s, 69.3 s | uplink **95.37 MiB = 100,000,000 B**                                        |
+| 20,000 x `send(64 KiB)` in Python   | 20,000 calls, 1,310,720,000 B             | **20,000 lines, 1,310,720,000 B**                                           |
+| ISO download, 928.6 s global run    | ~3.2 MB/s                                 | downlink **2947.89 MB**, recomputed by `awk` over the log to the same value |
+
+That 20,000-call test was run while four curl downloads were saturating the
+machine (5,201 events/s), which is also the evidence that the kretprobe instance
+pool is not silently dropping returns: `/sys/kernel/debug/kprobes/list` on this
+kernel exposes no `nmissed` counter (it lists the 21 registered probes, and the
+three entry-only hooks correctly have no `r` row), so the count was verified
+empirically instead.
+
+### Backpressure measured end to end
+
+`test/block_probe.py` makes the kernel actually hold a sender: the server accepts
+and then drains only 4 KiB every 0.3 s while the client writes 100 MB.
+
+```sh
+observer: [14:28:09.689] 🚧 [BACKPRESSURE] PID: 47684  Comm: python3  | Blocked: 30015456233 ns
+python:   send() 卡住(>1ms) 1 次, 合计 30.02s
+```
+
+30.0155 s measured in kernel vs 30.02 s measured by the application: 0.02 %
+apart. Two independent observer instances running at the same time recorded the
+same figure.
+
+The flip side is just as useful: the same hook fired **0 times** during a real
+1.44 MB/s upload, because curl was paced by the pipe and by HTTP framing and
+could always hand its bytes to the socket. So this row is a discriminator: "the
+stall is in the socket buffer" versus "the stall is above or below the socket".
+It is not a throughput gauge. On this desktop, across 928 s of real browsing
+plus downloads, 19 events appeared and the longest was 2.9 µs.
 
 ## Known limits
 
-These are measured, not theoretical:
-
-1. **No peer address or port.** The event carries process, direction, size and
-   kernel time — nothing about *who* is on the other end. This is the single
-   biggest gap: a video segment and a DNS reply look the same apart from size.
-   Adding it means reading `skc_family` / `skc_dport` out of `struct sock` via
-   `bpf_probe_read_kernel` (needs a struct offset, which is kernel-version
-   specific), or switching to tracepoints such as `tcp:tcp_retransmit_skb`,
-   which hand you family, both addresses and both ports as ready-made fields.
-2. **Events from softirq / timer context cannot be attributed to a process.**
-   In the run above, **522 of 924 `[TCP STATE]` lines were stamped to WiFi
-   interrupt threads** (`irq/155-iwlwifi` and friends), and in another run 30 of
-   47 retransmits were stamped to `swapper/N` (the idle task). Anything that can
-   be driven by a kernel timer or by packet receive falls in this class: use it
-   as a global counter, not as a per-process ranking.
-3. **`Latency` is kernel function duration, not network delay.** It contains no
-   RTT. For a blocking read it also includes the time spent waiting for data to
-   arrive, so a large value can mean "slow copy" or "the app waited" — the two
-   are indistinguishable today. `inet_csk_accept`'s value is dequeue time, not
-   handshake time.
-4. **`[RECV]` marks the moment the application read the bytes**, not the moment
-   they arrived. Queue depth, dwell time and UDP drops are invisible.
-5. **The exit summary under-counts.** Per-CPU reader tasks never stop, so events
-   processed after the summary is printed still reach the log (8,100 lines vs
-   `TOTAL 8072`). The log is complete; the summary is a snapshot. Fixing it
-   needs a shutdown flag.
-6. **The decoder side is out of scope.** Stutter caused by software decoding
-   (this machine's Firefox has VA-API off and `iHD_drv_video.so init failed`)
-   is invisible to socket-level hooks, which stop caring once the bytes reach
-   the application buffer.
+All eight limits are measured on a real desktop rather than reasoned about, and
+they are maintained in one bilingual file so the two languages cannot drift:
+**[docs/LIMITS.md](docs/LIMITS.md)**. In short: no peer address or port, softirq
+context is unattributable, `Latency:` is kernel time not network delay, `[RECV]`
+timestamps the read rather than the arrival, the decoder side is out of scope,
+aggregation keys on `comm` instead of PID, and `max_log_mb` caps one shard
+instead of the run. (One limit that used to be here, the under-counting exit
+summary, has been fixed and is verified in that file.)
 
 ## Tests
 
-`observer/src/main.rs` has a `#[cfg(test)]` module that pins the exact output
-string of every label (including emoji spacing and column padding) and asserts
-that each `TrafficDirection` discriminant still lines up with its row in
-`LOG_SPECS`.
+Format tests are `observer/tests/report.rs` (4 tests, no privileges); everything
+else is a manual harness run against live traffic. The full procedure, the
+measured baselines, the traps that look like bugs, and how to add a thirteenth
+hook live in **[docs/TESTING.md](docs/TESTING.md)**. Quick version:
 
 ```shell
-cargo test --release -p observer --no-run
-./target/release/deps/observer-<hash>
+cargo test --release -p observer --test report --no-run
+./target/release/deps/report-<hash>     # expected: 4 passed; 0 failed
 ```
 
-Run the binary directly rather than `cargo test` because `.cargo/config.toml`
-sets `runner = "sudo -E"`, which would make cargo ask for a password — these
-tests only format strings and need no privileges.
+Do not run plain `cargo test`: `.cargo/config.toml` sets `runner = "sudo -E"`, so
+cargo asks for a password. Use the exact path cargo prints, not a shell glob.
 
 ## Configuration
 
-`config.toml` in the repository root controls probe attachment, target
-selection and filtering.
+`config.toml` in the repository root controls probe attachment, target selection
+and filtering.
 
-| Section     | Key                | Meaning                                                        |
-| :---------- | :----------------- | :------------------------------------------------------------- |
-| `probes`    | `target_func`      | Kernel symbol to hook for egress (default `tcp_sendmsg`)        |
-|             | `recv_func`        | Kernel symbol to hook for ingress (default `tcp_recvmsg`; do not use `sock_recvmsg`) |
-|             | `accept_func`      | Symbol for new connections (default `inet_csk_accept`)          |
-|             | `retransmit_func`  | Symbol for retransmissions (default `tcp_retransmit_skb`)       |
-|             | `connect_func`     | Symbol for client-side connection attempts (default `tcp_connect`) |
-|             | `state_func`       | Symbol for TCP state transitions (default `tcp_set_state`)      |
-|             | `reset_func`       | Symbol for locally sent RST (default `tcp_send_active_reset`)   |
-|             | `backpressure_func` | Symbol hit when the send buffer holds the app (default `sk_stream_wait_memory`) |
-|             | `udp_send_func` / `udp_recv_func` | IPv4 UDP (default `udp_sendmsg` / `udp_recvmsg`) |
-|             | `udp6_send_func` / `udp6_recv_func` | IPv6 UDP (default `udpv6_sendmsg` / `udpv6_recvmsg`) |
-| `discovery` | `force_pid`        | Monitor only this PID; takes precedence over auto-detection     |
-|             | `auto_detect_name` | Substring match on process name; empty string means global mode |
-| `filters`   | `include_names`    | Allowlist on `comm`; empty means allow all                      |
-|             | `exclude_names`    | Denylist on `comm`; applied before the allowlist                |
-| `settings`  | `perf_pages`       | Per-CPU perf buffer size, in pages, must be a power of two      |
+| Section     | Key                                 | Meaning                                                                              |
+| :---------- | :---------------------------------- | :----------------------------------------------------------------------------------- |
+| `probes`    | `target_func`                       | Kernel symbol to hook for egress (default `tcp_sendmsg`)                             |
+|             | `recv_func`                         | Kernel symbol to hook for ingress (default `tcp_recvmsg`; do not use `sock_recvmsg`) |
+|             | `accept_func`                       | Symbol for new connections (default `inet_csk_accept`)                               |
+|             | `retransmit_func`                   | Symbol for retransmissions (default `tcp_retransmit_skb`)                            |
+|             | `connect_func`                      | Symbol for client-side connection attempts (default `tcp_connect`)                   |
+|             | `state_func`                        | Symbol for TCP state transitions (default `tcp_set_state`)                           |
+|             | `reset_func`                        | Symbol for locally sent RST (default `tcp_send_active_reset`)                        |
+|             | `backpressure_func`                 | Symbol hit when the send buffer holds the app (default `sk_stream_wait_memory`)      |
+|             | `udp_send_func` / `udp_recv_func`   | IPv4 UDP (default `udp_sendmsg` / `udp_recvmsg`)                                     |
+|             | `udp6_send_func` / `udp6_recv_func` | IPv6 UDP (default `udpv6_sendmsg` / `udpv6_recvmsg`)                                 |
+| `discovery` | `force_pid`                         | Monitor only this PID; takes precedence over auto-detection                          |
+|             | `auto_detect_name`                  | Substring match on process name; empty string means global mode                      |
+| `filters`   | `include_names`                     | Allowlist on `comm`; empty means allow all                                           |
+|             | `exclude_names`                     | Denylist on `comm`; applied before the allowlist                                     |
+| `settings`  | `perf_pages`                        | Per-CPU perf buffer size, in pages, must be a power of two                           |
+|             | `max_log_mb`                        | Size of one `traffic*.log` shard, in MB. `0` or the key absent = never split         |
 
 `discovery.auto_detect_name = ""` (global mode) combined with
 `filters.exclude_names` is the recommended setup for observing system-wide
@@ -237,15 +329,18 @@ Available kernel symbols can be listed with:
 grep -wE 'tcp_sendmsg|tcp_recvmsg|tcp_connect|tcp_set_state|tcp_send_active_reset|sk_stream_wait_memory|tcp_retransmit_skb|inet_csk_accept|udp_sendmsg|udp_recvmsg|udpv6_sendmsg|udpv6_recvmsg' /proc/kallsyms
 ```
 
-A `T` means a global symbol, `t` a local one — both are attachable, but only if
+A `T` means a global symbol, `t` a local one; both are attachable, but only if
 the function was not inlined away. `hooks_candidates.txt` in the repository root
 lists further candidate hooks, each marked with whether the resulting events can
 be attributed to a process (`P`) or land in softirq/timer context (`S`).
 
 ## Documentation
 
-- [docs/CN.md](docs/CN.md) — 中文版 `bpf-linker` 安装失败说明与解决方案.
-- [docs/EN.md](docs/EN.md) — English version of the same troubleshooting note.
+- [docs/TESTING.md](docs/TESTING.md) - how each hook is verified, with measured baselines.
+- [docs/LIMITS.md](docs/LIMITS.md) - the eight measured limits, English and Chinese in one file.
+- [docs/README_CN.md](docs/README_CN.md) - full Chinese version of this README.
+- [docs/EN.md](docs/EN.md) - `bpf-linker` installation failure: the raw error and how to fix it.
+- [docs/CN.md](docs/CN.md) - the same troubleshooting note in Chinese.
 
 ## License
 

@@ -56,7 +56,6 @@ static UDP_SEND_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
 // udp_recvmsg(v4) 与 udpv6_recvmsg(v6) 共用
 #[map]
 static UDP_RECV_START: HashMap<u64, u64> = HashMap::with_max_entries(10240, 0);
-// ↑↑↑ 新增 map 结束
 
 #[kprobe]
 pub fn tcp_retransmit_skb_entry(_ctx: ProbeContext) -> u32 {
@@ -117,7 +116,7 @@ pub fn inet_csk_accept_return(_ctx: RetProbeContext) -> u32 {
                 direction: TrafficDirection::Accept, // 标记为 Accept
                 duration_ns,
                 comm,
-                value: 0, // 新增字段追加在此
+                value: 0,
             };
             EVENTS.output(&_ctx, &event, 0);
         }
@@ -189,7 +188,7 @@ pub fn handle_return(
                 direction, // send or recv
                 duration_ns,
                 comm,
-                value: 0, // 新增字段追加在此
+                value: 0,
             };
 
             EVENTS.output(&ctx, &event, 0);
@@ -199,11 +198,7 @@ pub fn handle_return(
     0
 }
 
-// ============================================================ 以下为本次在后面追加的钩子
-// 你原有的 tcp_retransmit_skb_entry / inet_csk_accept_* / tcp_sendmsg_* / tcp_recvmsg_*
-// 和 handle_return 全部保持原位未动, 新程序一律加在它之后。
-
-// tcp_connect: 客户端发起连接。返回 0 只代表 SYN 已交出, 不代表三次握手完成
+// tcp_connect: 客户端发起连接.返回 0 只代表 SYN 已交出, 不代表三次握手完成
 #[kprobe]
 pub fn tcp_connect_entry(_ctx: ProbeContext) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
@@ -302,7 +297,7 @@ pub fn tcp_send_active_reset_entry(_ctx: ProbeContext) -> u32 {
     0
 }
 
-// sk_stream_wait_memory: 只有发送缓冲不足、应用被内核按住时才会被调用
+// sk_stream_wait_memory: 只有发送缓冲不足, 应用被内核按住时才会被调用
 // 出现即"上行被 TCP 层限住", duration_ns 就是应用等了多久
 #[kprobe]
 pub fn sk_stream_wait_memory_entry(_ctx: ProbeContext) -> u32 {
@@ -348,8 +343,8 @@ pub fn sk_stream_wait_memory_return(_ctx: RetProbeContext) -> u32 {
     0
 }
 
-// udp: IPv4 和 IPv6 是两套入口, 只挂 v4 会静默漏掉 IPv6 的 DNS 和 QUIC。
-// 复用你写好的 handle_return, 只是方向换成新增的 UdpEgress / UdpIngress。
+// udp: IPv4 和 IPv6 是两套入口, 只挂 v4 会静默漏掉 IPv6 的 DNS 和 QUIC.
+// 四个 udp 钩子都复用 handle_return, 只是方向换成 UdpEgress / UdpIngress.
 
 #[kprobe]
 pub fn udp_sendmsg_entry(_ctx: ProbeContext) -> u32 {
@@ -418,8 +413,6 @@ pub fn udpv6_recvmsg_entry(_ctx: ProbeContext) -> u32 {
 pub fn udpv6_recvmsg_return(_ctx: RetProbeContext) -> u32 {
     handle_return(_ctx, &UDP_RECV_START, TrafficDirection::Udp6Ingress)
 }
-
-// ============================================================ 追加结束
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
