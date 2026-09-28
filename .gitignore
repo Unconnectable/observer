@@ -10,3 +10,7 @@ results/
 **/*.rs.bk
 
 *.log
+
+# 本地 sudo 密码文件, 千万别进版本库
+pass.txt
+layer_landscape.txt

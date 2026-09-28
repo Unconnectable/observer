@@ -1,4 +1,4 @@
-//! 配置: 结构定义、读取 config.toml、以及要监控哪个进程
+//! 配置: 结构定义, 读取 config.toml, 以及要监控哪个进程
 use log::{info, warn};
 use serde::Deserialize;
 use sysinfo::{PidExt, ProcessExt, System, SystemExt};
@@ -17,8 +17,7 @@ pub struct ProbesConfig {
     pub recv_func: String,
     pub accept_func: String,
     pub retransmit_func: String,
-
-    // 追加挂载点
+    // 挂载点
     pub connect_func: String,
     pub state_func: String,
     pub reset_func: String,
@@ -44,6 +43,11 @@ pub struct FiltersConfig {
 #[derive(Debug, Deserialize)]
 pub struct SettingsConfig {
     pub perf_pages: usize,
+
+    // 单个 traffic.log 的上限(MB), 0 或省略 = 不限.
+    // 全局模式实测 8.5 MB/min, 一晚上就是十几 GB, 所以给了这个闸
+    #[serde(default)]
+    pub max_log_mb: u64,
 }
 
 /// 加载并解析 config.toml(相对当前工作目录)

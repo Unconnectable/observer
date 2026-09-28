@@ -1,6 +1,6 @@
-//! observer 的用户态部分。
+//! observer 的用户态部分.
 //! 拆成模块是为了让 main.rs 只管"装配 + 收事件", 也让测试能从外部访问
-//! (见 tests/ 目录, 集成测试只能用 crate 的公开 API)。
+//! (见 tests/ 目录, 集成测试只能用 crate 的公开 API).
 
 pub mod config;
 pub mod hooks;

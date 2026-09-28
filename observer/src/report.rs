@@ -1,5 +1,5 @@
-//! 一行日志怎么拼。所有差异都收在 LOG_SPECS 这张表里,
-//! 退出汇总也取同一份 tag, 所以日志里的标签和统计里的标签不会分成两套。
+//! 一行日志怎么拼.所有差异都收在 LOG_SPECS 这张表里,
+//! 退出汇总也取同一份 tag, 所以日志里的标签和统计里的标签不会分成两套.
 use observer_common::{tcp_state, TcpEvent, TrafficDirection};
 
 // tcp_set_state 上报的数值翻译成状态名
