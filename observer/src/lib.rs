@@ -7,6 +7,7 @@ pub mod hooks;
 pub mod logger;
 pub mod report;
 pub mod stats;
+pub mod tui;
 
 // 让外部测试只需要 use observer::..., 不必再单独引入 observer-common
 pub use observer_common::{TcpEvent, TrafficDirection};

@@ -48,6 +48,10 @@ pub struct SettingsConfig {
     // 全局模式实测 8.5 MB/min, 一晚上就是十几 GB, 所以给了这个闸
     #[serde(default)]
     pub max_log_mb: u64,
+
+    // "tui" = 界面模式(三块面板, q 退出); 填别的或整行不写 = 现在的纯文本行为
+    #[serde(default)]
+    pub ui_mode: String,
 }
 
 /// 加载并解析 config.toml(相对当前工作目录)
