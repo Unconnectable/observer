@@ -156,52 +156,52 @@ cargo test --release -p observer --test report --no-run
 
 两个坑都是真踩过的:
 
-1. **不要直接 `cargo test`**。`.cargo/config.toml` 里设了 `runner = "sudo -E"`,
-   cargo 会用 sudo 去跑测试二进制并向你要密码。用 `--no-run` 构建, 然后执行它打印
-   出来的那个路径。
-2. 路径要取 cargo 自己那行 `Executable ...`。像 `./target/release/deps/report-*`
-   这种 glob 会选中过期二进制, 打印 `0 passed; 4 filtered out`, 看着像通过, 其实没跑。
+1. **不要直接 `cargo test`**.`.cargo/config.toml` 里设了 `runner = "sudo -E"`,
+   cargo 会用 sudo 去跑测试二进制并向你要密码.用 `--no-run` 构建, 然后执行它打印
+   出来的那个路径.
+2. 路径要取 cargo 自己那行 `Executable ...`.像 `./target/release/deps/report-*`
+   这种 glob 会选中过期二进制, 打印 `0 passed; 4 filtered out`, 看着像通过, 其实没跑.
 
 ### 第二层: 手工验证
 
 通用做法: 先 `sudo ./run.sh`, 等日志里出现带时间戳的 `🪝 Hooks Active: ...` 那行,
-**然后**再造流量。
+**然后**再造流量.
 
-| #    | 证明什么                                     | 命令                                                                                                   | 本机基线                                                                                                                                                     |
-| :--- | :------------------------------------------- | :----------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | 十二个符号都存在                             | `grep -wE '…\|udpv6_recvmsg' /proc/kallsyms`                                                           | 全在; `T` 全局, `t` 局部, 只要没被内联都能挂                                                                                                                 |
-| 2    | 探针真的注册上了                             | 运行时 `sudo cat /sys/kernel/debug/kprobes/list`                                                       | 21 行: 12 个 `k` + 9 个 `r`; 三个只挂入口的钩子(`tcp_set_state`、`tcp_send_active_reset`、`tcp_retransmit_skb`)没有 `r` 行, 符合预期                         |
-| 3    | 字节记账与独立计数器一致                     | `curl -L -o /dev/null <大 ISO>`; `head -c 100000000 /dev/zero \| curl -X POST --data-binary @- …/__up` | 100 MB 上传: 上行那一行 `95.37 MiB` = 100,000,000 B, 逐字节相等; 928.6 s 那次印 `2947.89 MB`, 用 `awk` 重算日志得到同一个值                                  |
-| 4    | 高负载下不丢事件                             | 四个 curl 打满机器的同时跑 20,000 次 `send(64 KiB)`                                                    | observer 记下 **20,000 行 / 1,310,720,000 字节**, 当时 5,201 事件/s。这也是 kretprobe 实例池的检查: 本机 `kprobes/list` 不暴露 `nmissed`, 所以用计数实测代替 |
-| 5    | 退出汇总是精确的                             | 拿 `TOTAL` 跟跨分片的事件行数 `grep -c` 比                                                             | 84,844 / 444,987 / 1,480,008 / 2,769,951 四种规模下差都是 **0**                                                                                              |
-| 6    | `[RST]` 会在主动中止时触发                   | 强制 16 次 `SO_LINGER {on_off=1, time=0}` 后 `close()`, 或关闭时有未读数据                             | 恰好 **16** 行。真实流量里也有: 928 s 那次 7 行, 全来自同一个 Chrome IO 线程, 其中 3 行在同一毫秒                                                            |
-| 7    | `sk_stream_wait_memory` 能报出真实的挂起时长 | `test/block_probe.py`(见下)                                                                            | `Blocked: 30015456233 ns` 对上应用自己量的 `30.02s`, 相差 0.02 %                                                                                             |
-| 8    | 每秒活行不刷屏                               | 数捕获到的 stdout 里换行与 `\r` 的个数                                                                 | 16.4 s: 15 次刷新、25 个换行, 其中 0 个来自活行; 928 s: 文件里 926 行, 屏幕上仍只占一行                                                                      |
-| 9    | 日志分片可用                                 | 设 `max_log_mb = 1`, 以约 3,000 事件/s 抓                                                              | 每片 1,059,5xx 字节, 边界精确到行; 切换标记写在新分片第一行, **不**上屏                                                                                      |
+| #    | 证明什么                                     | 命令                                                                                                   | 本机基线                                                                                                                                                    |
+| :--- | :------------------------------------------- | :----------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | 十二个符号都存在                             | `grep -wE '…\|udpv6_recvmsg' /proc/kallsyms`                                                           | 全在; `T` 全局, `t` 局部, 只要没被内联都能挂                                                                                                                |
+| 2    | 探针真的注册上了                             | 运行时 `sudo cat /sys/kernel/debug/kprobes/list`                                                       | 21 行: 12 个 `k` + 9 个 `r`; 三个只挂入口的钩子(`tcp_set_state`、`tcp_send_active_reset`、`tcp_retransmit_skb`)没有 `r` 行, 符合预期                        |
+| 3    | 字节记账与独立计数器一致                     | `curl -L -o /dev/null <大 ISO>`; `head -c 100000000 /dev/zero \| curl -X POST --data-binary @- …/__up` | 100 MB 上传: 上行那一行 `95.37 MiB` = 100,000,000 B, 逐字节相等; 928.6 s 那次印 `2947.89 MB`, 用 `awk` 重算日志得到同一个值                                 |
+| 4    | 高负载下不丢事件                             | 四个 curl 打满机器的同时跑 20,000 次 `send(64 KiB)`                                                    | observer 记下 **20,000 行 / 1,310,720,000 字节**, 当时 5,201 事件/s.这也是 kretprobe 实例池的检查: 本机 `kprobes/list` 不暴露 `nmissed`, 所以用计数实测代替 |
+| 5    | 退出汇总是精确的                             | 拿 `TOTAL` 跟跨分片的事件行数 `grep -c` 比                                                             | 84,844 / 444,987 / 1,480,008 / 2,769,951 四种规模下差都是 **0**                                                                                             |
+| 6    | `[RST]` 会在主动中止时触发                   | 强制 16 次 `SO_LINGER {on_off=1, time=0}` 后 `close()`, 或关闭时有未读数据                             | 恰好 **16** 行.真实流量里也有: 928 s 那次 7 行, 全来自同一个 Chrome IO 线程, 其中 3 行在同一毫秒                                                            |
+| 7    | `sk_stream_wait_memory` 能报出真实的挂起时长 | `test/block_probe.py`(见下)                                                                            | `Blocked: 30015456233 ns` 对上应用自己量的 `30.02s`, 相差 0.02 %                                                                                            |
+| 8    | 每秒活行不刷屏                               | 数捕获到的 stdout 里换行与 `\r` 的个数                                                                 | 16.4 s: 15 次刷新、25 个换行, 其中 0 个来自活行; 928 s: 文件里 926 行, 屏幕上仍只占一行                                                                     |
+| 9    | 日志分片可用                                 | 设 `max_log_mb = 1`, 以约 3,000 事件/s 抓                                                              | 每片 1,059,5xx 字节, 边界精确到行; 切换标记写在新分片第一行, **不**上屏                                                                                     |
 
 ### UDP6 只验证了一半
 
 `[UDP6 SEND]` / `[UDP6 RECV]` 在本机一直是 0, 这与"这台机器根本没有 global IPv6
-地址"一致(`ip -6 addr show scope global` 什么都没输出, 只有 `fe80::` 链路本地路由)。
+地址"一致(`ip -6 addr show scope global` 什么都没输出, 只有 `fe80::` 链路本地路由).
 但**钩子本身还没有可复现的测试记录**: 0 可能意味着"没有 v6 流量", 也可能意味着
-"从来没响"。在下结论之前, 先在回环 `::1` 上发一次 v6 UDP 看有没有 `[UDP6 ...]` 行。
-在那之前它只能算"符号存在、能挂、没出过数据"。
+"从来没响".在下结论之前, 先在回环 `::1` 上发一次 v6 UDP 看有没有 `[UDP6 ...]` 行.
+在那之前它只能算"符号存在、能挂、没出过数据".
 
 ### 看着像 bug 其实不是的几件事
 
-- **流量早于挂载。** 如果数据在 `Hooks Active` 之前就发完了, 相关计数全是 0。
-  测背压时踩过两次。用日志行上的 banner 时间戳判断先后。
-- **curl 跑得太快来不及测。** 一次 50 MB 回环传输 0.01 秒结束, 什么都没记到;
-  要么加节流(每次 send 之间 `time.sleep(0.01)`), 要么把量做大。
-- **后台起的 sudo 读不到密码。** sudo 需要 tty; 要么前台跑并用
-  `sudo -S ... < pass.txt`, 要么先 `sudo -v` 把时间戳刷新。
-- **root 写过的 `results/` 属主是 root。** 之后非 root 运行会在
-  `TrafficLogger::init()` 里中止。用 `sudo chown -R "$USER": results` 修。
-- **绝不按名字杀 observer。** `pkill -f target/release/observer` 会连带杀掉用户在
-  终端里用 `run.sh` 起的实例。只给自己启动的那个 PID 发信号。
-- **`grep -c RETRANSMIT` 会多计。** banner 行 `🪝 Hooks Active: ...` 里包含所有标签。
+- **流量早于挂载.** 如果数据在 `Hooks Active` 之前就发完了, 相关计数全是 0.
+  测背压时踩过两次.用日志行上的 banner 时间戳判断先后.
+- **curl 跑得太快来不及测.** 一次 50 MB 回环传输 0.01 秒结束, 什么都没记到;
+  要么加节流(每次 send 之间 `time.sleep(0.01)`), 要么把量做大.
+- **后台起的 sudo 读不到密码.** sudo 需要 tty; 要么前台跑并用
+  `sudo -S ... < pass.txt`, 要么先 `sudo -v` 把时间戳刷新.
+- **root 写过的 `results/` 属主是 root.** 之后非 root 运行会在
+  `TrafficLogger::init()` 里中止.用 `sudo chown -R "$USER": results` 修.
+- **绝不按名字杀 observer.** `pkill -f target/release/observer` 会连带杀掉用户在
+  终端里用 `run.sh` 起的实例.只给自己启动的那个 PID 发信号.
+- **`grep -c RETRANSMIT` 会多计.** banner 行 `🪝 Hooks Active: ...` 里包含所有标签.
   要匹配行首的方括号事件标签, 例如
-  `grep -cE '^\[[0-9:.]+\] 🚨 \[TCP RETRANSMIT\]'`。
+  `grep -cE '^\[[0-9:.]+\] 🚨 \[TCP RETRANSMIT\]'`.
 
 ### `test/block_probe.py`
 
@@ -212,31 +212,31 @@ cd ~/code/observer && sudo ./run.sh          # 等 "Hooks Active" 那行出现
 python3 test/block_probe.py                  # 另开一个终端
 ```
 
-一个进程、两个线程、一条回环连接。服务端 accept 之后每 0.3 秒只读 4 KiB
-(约 13 KB/s), 客户端以 64 KiB 一次猛写 100 MB。接收窗收到 0, 发送缓冲顶到
+一个进程、两个线程、一条回环连接.服务端 accept 之后每 0.3 秒只读 4 KiB
+(约 13 KB/s), 客户端以 64 KiB 一次猛写 100 MB.接收窗收到 0, 发送缓冲顶到
 `tcp_wmem`(本机 4 MB), 下一次 `send()` 就睡进 `sk_stream_wait_memory`, 直到对端
-关闭、RST 把它叫醒。脚本自己给每次 `send()` 计时, 所以它那个"超过 1 ms 的合计"
-是一份**应用侧的独立证词**, 可以和内核侧的 `Blocked:` 对表。
+关闭、RST 把它叫醒.脚本自己给每次 `send()` 计时, 所以它那个"超过 1 ms 的合计"
+是一份**应用侧的独立证词**, 可以和内核侧的 `Blocked:` 对表.
 
-实测结论: 第一版脚本里写的预期("会看到很多条几毫秒的")是错的。真实情况是
-**一条 30 秒的挂起** —— 缓冲顶满之后一次 `send()` 会一路睡到被唤醒。想要很多条
-短挂起, 把 0.3 秒缩到约 0.02 秒, 让缓冲维持在临界附近。
+实测结论: 第一版脚本里写的预期("会看到很多条几毫秒的")是错的.真实情况是
+**一条 30 秒的挂起** —— 缓冲顶满之后一次 `send()` 会一路睡到被唤醒.想要很多条
+短挂起, 把 0.3 秒缩到约 0.02 秒, 让缓冲维持在临界附近.
 
 可调量: `TOTAL`、`CHUNK`、`DRAIN_ROUNDS`、那个 `0.3` 睡眠, 以及 `PORT = 0`
-(让内核挑空闲端口; 固定端口第二次跑就 `Address already in use`)。
+(让内核挑空闲端口; 固定端口第二次跑就 `Address already in use`).
 
 ### 要加第十三个钩子时
 
 这三处的顺序是耦合的, 自动测试能抓住其中两个错误:
 
 1. `observer-common/src/lib.rs`: 新的 `TrafficDirection` 变体**加在末尾**(下标就是
-   线上格式, 中间插一个会把后面全挪位)。
+   线上格式, 中间插一个会把后面全挪位).
 2. `observer-ebpf/src/main.rs`: 写 kprobe/kretprobe 程序, 并给每个已有的
-   `TcpEvent { .. }` 字面量补上 `value: 0`。
+   `TcpEvent { .. }` 字面量补上 `value: 0`.
 3. `observer/src/report.rs`: 在**同一个下标**处给 `LOG_SPECS` 加一行和对应标签;
-   下标和变体不一致时 `table_index_matches_enum` 会失败。
+   下标和变体不一致时 `table_index_matches_enum` 会失败.
 4. `observer/src/stats.rs`: 扩 `DIRECTIONS`(顺序要一致); 如果新事件带字节, 还要加进
-   `record()` 里的方向 match。
+   `record()` 里的方向 match.
 5. `observer/src/config.rs` + `config.toml`: 一个内核符号的配置键, 再在
-   `observer/src/hooks.rs::plan()` 里加一行。
-6. `observer/tests/report.rs`: 先把新那一行的渲染钉住, 再相信它。
+   `observer/src/hooks.rs::plan()` 里加一行.
+6. `observer/tests/report.rs`: 先把新那一行的渲染钉住, 再相信它.

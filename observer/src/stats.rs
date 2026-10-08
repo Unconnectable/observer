@@ -2,7 +2,9 @@
 //! 标签取自 report::LOG_SPECS, 与每行日志同一份定义.
 use crate::report::{LogSpec, HOOK_KINDS, LOG_SPECS};
 use crate::{TcpEvent, TrafficDirection};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 /// 下标 = TrafficDirection 的取值, 与 report::LOG_SPECS 的行序一一对应
@@ -30,6 +32,27 @@ pub struct Sample {
     pub blocked_ms: f64,
 }
 
+/// 一个进程(PID 维度)累计到的量, 只在界面模式下才记账
+#[derive(Clone)]
+pub struct PidRow {
+    pub pid: u32,
+    pub comm: String,
+    pub events: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_n: u64,
+    pub tx_n: u64,
+    pub retrans: u64,
+    pub rst: u64,
+    pub blocked_ns: u64,
+}
+
+impl PidRow {
+    pub fn bytes_total(&self) -> u64 {
+        self.rx_bytes + self.tx_bytes
+    }
+}
+
 pub struct Metrics {
     hits: Vec<AtomicU64>,
     bytes_tx: AtomicU64,
@@ -37,6 +60,9 @@ pub struct Metrics {
     blocked_ns: AtomicU64,
     // 重传事件里有多少条的 comm 是软中断/网卡中断(kprobe 拿不到真正的进程)
     retrans_irq: AtomicU64,
+    // 按 PID 的明细, 默认关闭: 纯文本模式不需要它, 免得每条事件多一次加锁
+    track_pids: AtomicBool,
+    pids: Mutex<HashMap<u32, PidRow>>,
     started: Instant,
 }
 
@@ -54,8 +80,35 @@ impl Metrics {
             bytes_rx: AtomicU64::new(0),
             blocked_ns: AtomicU64::new(0),
             retrans_irq: AtomicU64::new(0),
+            track_pids: AtomicBool::new(false),
+            pids: Mutex::new(HashMap::new()),
             started: Instant::now(),
         }
+    }
+
+    /// 打开按 PID 的明细记账(界面模式用)
+    pub fn set_track_pids(&self, on: bool) {
+        self.track_pids.store(on, Ordering::Relaxed);
+    }
+
+    /// 当前按 PID 的明细, 按总字节从多到少排
+    pub fn pid_rows(&self) -> Vec<PidRow> {
+        let mut rows: Vec<PidRow> = match self.pids.lock() {
+            Ok(g) => g.values().cloned().collect(),
+            Err(_) => return Vec::new(),
+        };
+        rows.sort_by(|a, b| b.bytes_total().cmp(&a.bytes_total()));
+        rows
+    }
+
+    /// 累计被按住的毫秒总数
+    pub fn blocked_ms_total(&self) -> f64 {
+        self.blocked_ns.load(Ordering::Relaxed) as f64 / 1_000_000.0
+    }
+
+    /// 重传里落在软中断/网卡中断的条数(这部分拿不到真正的进程)
+    pub fn retrans_irq_total(&self) -> u64 {
+        self.retrans_irq.load(Ordering::Relaxed)
     }
 
     fn add(&self, which: TrafficDirection) -> u64 {
@@ -95,13 +148,56 @@ impl Metrics {
         if event.direction == TrafficDirection::Retransmit && Self::is_irq_comm(&event.comm) {
             self.retrans_irq.fetch_add(1, Ordering::Relaxed);
         }
+
+        // 按 PID 的明细: 键用 tgid(进程), 不用 pid(线程), 否则一个浏览器会铺成几十个条目
+        if self.track_pids.load(Ordering::Relaxed) {
+            let comm = String::from_utf8_lossy(&event.comm)
+                .trim_end_matches('\0')
+                .to_string();
+            if let Ok(mut g) = self.pids.lock() {
+                let row = g.entry(event.tgid).or_insert_with(|| PidRow {
+                    pid: event.tgid,
+                    comm: String::new(),
+                    events: 0,
+                    rx_bytes: 0,
+                    tx_bytes: 0,
+                    rx_n: 0,
+                    tx_n: 0,
+                    retrans: 0,
+                    rst: 0,
+                    blocked_ns: 0,
+                });
+                if row.comm.is_empty() {
+                    row.comm = comm;
+                }
+                row.events += 1;
+                match event.direction {
+                    TrafficDirection::Egress
+                    | TrafficDirection::UdpEgress
+                    | TrafficDirection::Udp6Egress => {
+                        row.tx_bytes += event.len as u64;
+                        row.tx_n += 1;
+                    }
+                    TrafficDirection::Ingress
+                    | TrafficDirection::UdpIngress
+                    | TrafficDirection::Udp6Ingress => {
+                        row.rx_bytes += event.len as u64;
+                        row.rx_n += 1;
+                    }
+                    TrafficDirection::Retransmit => row.retrans += 1,
+                    TrafficDirection::Reset => row.rst += 1,
+                    TrafficDirection::Backpressure => row.blocked_ns += event.duration_ns,
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn secs(&self) -> f64 {
         self.started.elapsed().as_secs_f64().max(0.001)
     }
 
-    fn human(bytes: f64) -> String {
+    pub fn human(bytes: f64) -> String {
         if bytes >= 1_048_576.0 {
             format!("{:.2} MB", bytes / 1_048_576.0)
         } else if bytes >= 1024.0 {
@@ -227,7 +323,7 @@ impl Metrics {
         out
     }
 
-    fn human_ms(ms: f64) -> String {
+    pub fn human_ms(ms: f64) -> String {
         if ms >= 1000.0 {
             format!("{:.2} s", ms / 1000.0)
         } else if ms >= 1.0 {

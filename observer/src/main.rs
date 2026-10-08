@@ -84,6 +84,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let stop = Arc::new(AtomicBool::new(false)); // 置为 true 后各任务收尾退出
     let mut readers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
+    // ui_mode = "tui" 才进界面; 填别的或不填 = 现在这套纯文本行为
+    let use_tui = config.settings.ui_mode == "tui";
+    counts.set_track_pids(use_tui);
+    let recent: observer::tui::Recent =
+        Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+
     // start logging loop
     let start_msg = "🚀 Observer is running. Capturing events...";
     logger.log(start_msg);
@@ -99,6 +105,8 @@ async fn main() -> Result<(), anyhow::Error> {
         let file_logger = logger.clone();
         let counts = counts.clone(); // 每个 CPU 的任务共用同一份计数器
         let stop = stop.clone(); // 共用同一个退出标志
+        let recent = recent.clone(); // 界面模式下最近事件面板取的那条环
+        let ui_on = use_tui;
 
         readers.push(tokio::spawn(async move {
             let mut buffers = (0..10)
@@ -142,6 +150,16 @@ async fn main() -> Result<(), anyhow::Error> {
                     // println!("{}", log_line);
                     file_logger.log(&log_line);
 
+                    // 界面模式才用: 这行进最近事件环, 超出上限丢最旧的那行
+                    if ui_on {
+                        if let Ok(mut q) = recent.lock() {
+                            if q.len() >= observer::tui::RING_MAX {
+                                q.pop_front();
+                            }
+                            q.push_back(log_line);
+                        }
+                    }
+
                     // 计数, 供退出时汇总
                     counts.record(&event);
                 }
@@ -154,6 +172,7 @@ async fn main() -> Result<(), anyhow::Error> {
         let counts = counts.clone();
         let file_logger = logger.clone();
         let stop = stop.clone();
+        let ui_on = use_tui;
         tokio::spawn(async move {
             const STATS_MS: u64 = 1000;
             let mut prev = counts.snapshot();
@@ -165,15 +184,50 @@ async fn main() -> Result<(), anyhow::Error> {
                 let cur = counts.snapshot();
                 let line = Metrics::interval_line(&prev, &cur);
                 // \r 回到行首 + \x1b[K 擦掉右边残留, 所以屏幕上永远是同一行在换数字
-                print!("\r\x1b[K{}", line);
-                let _ = std::io::stdout().flush();
+                // 界面模式下这行不上屏(屏幕归 TUI 画), 但文件里照样每秒留一行
+                if !ui_on {
+                    print!("\r\x1b[K{}", line);
+                    let _ = std::io::stdout().flush();
+                }
                 file_logger.log(&line);
                 prev = cur;
             }
         })
     };
 
-    signal::ctrl_c().await?;
+    // 界面模式: 钩子已经全部挂好, 这时才接管终端(进 alternate screen)
+    let ui_handle = if use_tui {
+        let counts = counts.clone();
+        let recent_ui = recent.clone();
+        let stop_ui = stop.clone();
+        Some(tokio::task::spawn_blocking(move || {
+            observer::tui::run(counts, recent_ui, stop_ui)
+        }))
+    } else {
+        None
+    };
+
+    // raw 模式开着时 Ctrl-C 会变成按键而不是信号, 所以两条退出路都要等:
+    // 文本模式等 Ctrl-C, 界面模式等用户按 q(或 Ctrl-C 落到 select 的另一支)
+    match ui_handle {
+        Some(handle) => {
+            tokio::select! {
+                _ = signal::ctrl_c() => {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                res = handle => {
+                    match res {
+                        Err(e) => warn!("⚠️ 界面任务没正常结束: {}", e),
+                        Ok(Err(e)) => warn!("⚠️ 界面报错: {}", e),
+                        Ok(Ok(())) => {}
+                    }
+                }
+            }
+        }
+        None => {
+            signal::ctrl_c().await?;
+        }
+    }
 
     // 先让各 CPU 的读取任务收尾, 再统计, 否则汇总会漏掉最后一批
     stop.store(true, Ordering::Relaxed);
@@ -186,7 +240,9 @@ async fn main() -> Result<(), anyhow::Error> {
     {
         warn!("⚠️ 统计任务 1.2 秒没退出, 强制掐掉");
     }
-    println!(); // 那行结尾没有换行, 这里补一个, 让它正式占一行
+    if !use_tui {
+        println!(); // 那行结尾没有换行, 这里补一个, 让它正式占一行
+    }
 
     // 退出
     let exit_msg = "👋 Exiting...";

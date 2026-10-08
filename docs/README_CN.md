@@ -141,6 +141,32 @@ results/<YYYY-MM>/<DD_HH-MM-SS_run>/
 - `发不出去` 是内核因为发送缓冲区已满而按住发送方的时长. 亚毫秒值属于常规噪声; 本机实测出的有效判读阈值是**单次事件 >1 ms, 一秒内累计 >50 ms**.
 - `发起连接` 统计客户端侧的 `tcp_connect`; 服务端侧的视角是 `NEW CONN`(`inet_csk_accept` 返回). 这两者在客户端机器上极不对称 — 上面那次运行是 366 对 6 — 这是预期, 不是 bug.
 
+### 界面模式
+
+`config.toml` 里写 `ui_mode = "tui"` 会把每秒活行换成三块面板: 顶部速率, 中间**按 PID**
+的明细表(按字节排序, 按 q 退出并照旧输出退出汇总), 底部最近 200 行事件. 下面是一次 46 秒、
+期间下载 93 MB 并上传 20 MB 的会话录屏重建出来的样子:
+
+```
++-------------------------------------------------------------+
+| observer  (q 退出, p 暂停刷新)                               |
+| 跑了 46 s   这一秒 15.8 条/s  ↓4.5 KB/s  ↑0.0 KB/s           |
+| 累计 ↓93.75 MB  ↑20.19 MB  重传 46 次(其中 36 次在中断里)  发不出去 18.4 µs |
++-------------------------------------------------------------+
+| PID     进程            事件数   下行      上行      重传 RST 按住    |
+| 89241   curl          96250   93.67 MB  1.1 KB     0    0   -       |
+| 89251   curl           1244    4.6 KB  19.10 MB    0    0   -       |
+| 3109    WorkerThread    271    69.8 KB   1.08 MB   1    0   18.4 µs |
+| …另有 6 个进程没显示                                                |
++-------------------------------------------------------------+
+| 最近事件 (最新在上面)                                                |
+| [RECV] PID: 3908  Comm: WorkerThread  Size: 392 bytes | Latency: …  |
++-------------------------------------------------------------+
+```
+
+在 100 列的终端下头部两行仍放得下, 再窄就会被切. 按 PID 的记账只在这个模式下打开,
+纯文本模式不会多一次加锁.
+
 ## 实测结果
 
 一次 60 秒的全局模式抓取, 期间在 Firefox 里播放 B 站视频、循环跑 curl、并有一个编辑器在运行, 十二个钩子全部挂上且无挂载失败, 产出 **8,100 行日志**.
@@ -195,7 +221,7 @@ cargo test --release -p observer --test report --no-run
 ```
 
 不要直接跑 `cargo test`: `.cargo/config.toml` 设了 `runner = "sudo -E"`, cargo 会去要
-密码。路径用 cargo 自己打印的那个, 不要用 shell 通配符。
+密码.路径用 cargo 自己打印的那个, 不要用 shell 通配符.
 
 ## 配置
 
@@ -219,6 +245,7 @@ cargo test --release -p observer --test report --no-run
 |             | `exclude_names`                     | 对 `comm` 的黑名单; 先于白名单应用                                  |
 | `settings`  | `perf_pages`                        | per-CPU perf 缓冲区大小, 以页计, 必须是 2 的幂                      |
 |             | `max_log_mb`                        | 单个 `traffic*.log` 分片的大小, 以 MB 计. `0` 或不写该键 = 永不切分 |
+|             | `ui_mode`                           | `"tui"` = 三块面板的实时界面; 填别的或不写 = 纯文本(默认)           |
 
 `discovery.auto_detect_name = ""`(全局模式)配合 `filters.exclude_names` 是推荐配置, 用于观测全系统流量而不至于被编辑器、浏览器和内核工作线程的噪声淹没.
 
@@ -232,6 +259,7 @@ grep -wE 'tcp_sendmsg|tcp_recvmsg|tcp_connect|tcp_set_state|tcp_send_active_rese
 
 ## 文档
 
+- [CHANGELOG.md](../CHANGELOG.md) - 按提交日期排的更新日志.
 - [docs/TESTING.md](TESTING.md) - 每个钩子怎么验证, 附实测基线.
 - [docs/LIMITS.md](LIMITS.md) - 八条实测局限, 英文与中文放在同一文件里维护.
 - [docs/CN.md](CN.md) — 中文版 `bpf-linker` 安装失败说明与解决方案.

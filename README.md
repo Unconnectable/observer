@@ -1,6 +1,6 @@
 # observer
 
-[English](README.md) | [Chinese](docs/README_CN.md)
+[English](README.md) | [Chinese](docs/wREADME_CN.md)
 
 An eBPF-based per-process network traffic observer built with
 [Aya](https://aya-rs.dev). It attaches kprobes/kretprobes to kernel TCP and UDP
@@ -209,6 +209,18 @@ How to read the rows that are *not* self-evident:
   `inet_csk_accept` sleeps inside the kernel until a connection is actually
   dequeued, so its return probe fires far less often than `tcp_connect`'s.
 
+### Terminal UI
+
+Setting `ui_mode = "tui"` in `config.toml` replaces the live row with a
+three-pane dashboard: rates on top, a **per-PID** table in the middle (sorted by
+bytes, `q` quits and runs the same exit summary), and the last 200 event lines at
+the bottom. Reconstructed from a captured 46 s session that downloaded 93 MB and
+uploaded 20 MB:
+
+Measured on a 100-column terminal the header still fits; below that the long
+second row starts to clip. Per-PID accounting is only switched on in this mode, so
+the text mode pays no extra lock cost.
+
 ## Measured results
 
 A 60 s global-mode capture while playing a Bilibili video in Firefox, curl in a
@@ -318,6 +330,7 @@ and filtering.
 |             | `exclude_names`                     | Denylist on `comm`; applied before the allowlist                                     |
 | `settings`  | `perf_pages`                        | Per-CPU perf buffer size, in pages, must be a power of two                           |
 |             | `max_log_mb`                        | Size of one `traffic*.log` shard, in MB. `0` or the key absent = never split         |
+|             | `ui_mode`                           | `"tui"` = live three-pane dashboard; any other value or the key absent = plain text  |
 
 `discovery.auto_detect_name = ""` (global mode) combined with
 `filters.exclude_names` is the recommended setup for observing system-wide
@@ -336,6 +349,7 @@ be attributed to a process (`P`) or land in softirq/timer context (`S`).
 
 ## Documentation
 
+- [CHANGELOG.md](CHANGELOG.md) - release history, dated by commit.
 - [docs/TESTING.md](docs/TESTING.md) - how each hook is verified, with measured baselines.
 - [docs/LIMITS.md](docs/LIMITS.md) - the eight measured limits, English and Chinese in one file.
 - [docs/README_CN.md](docs/README_CN.md) - full Chinese version of this README.

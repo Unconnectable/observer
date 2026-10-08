@@ -21,6 +21,8 @@ sysinfo = "0.29"
 
 # 用于生成时间戳文件夹
 chrono = "0.4"
+ratatui = "0.30.2"
+crossterm = { version = "0.29.0", features = ["events"] }
 
 [build-dependencies]
 anyhow = "1"

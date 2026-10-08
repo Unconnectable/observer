@@ -47,3 +47,9 @@ perf_pages = 64
 # 5. 单个 traffic.log 的上限(MB), 写满就切 traffic.2.log / traffic.3.log ...
 # 填 0 或整行删掉 = 不限. 全局模式实测每分钟约 8.5 MB, 挂机一晚是十几 GB
 max_log_mb = 64
+
+# 6. 界面模式: "tui" = 实时界面(顶部速率 + 按 PID 明细表 + 最近事件, 按 q 退出)
+# 或者 "text" 
+# ui_mode = "text"
+
+ui_mode = "tui"
